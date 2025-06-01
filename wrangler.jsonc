@@ -1,0 +1,24 @@
+// {
+//   "$schema": "node_modules/wrangler/config-schema.json",
+//   "name": "mcp-dploy",
+//   "main": "src/index.ts",
+//   "compatibility_date": "2025-04-22",
+//   "compatibility_flags": ["nodejs_compat"],
+//   "observability": {
+//     "enabled": true
+//   },
+//   // Not strictly necessary, but these are unused and reduce the size of the deployed bundle by 60%
+//   "alias": {
+//     "raw-body": "./src/empty.ts",
+//     "content-type": "./src/empty.ts"
+//   },
+//   "dev": {
+//     "port": 3000
+//   },
+//   "routes": [
+//     {
+//       "pattern": "mcpdeploy.com/mcp/*",
+//       "custom_domain": true
+//     }
+//   ]
+// }

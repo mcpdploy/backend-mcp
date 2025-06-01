@@ -1,0 +1,29 @@
+# wrangler.toml
+name               = "mcp-dploy"
+main               = "src/index.ts"
+compatibility_date = "2025-04-22"
+
+# publish to your custom domain instead of workers.dev
+workers_dev = false  
+account_id  = "4c88d9185392b64fc4037c6c2cedf46e"             
+
+
+# bind only the /mcp/* path on your domain
+routes = [
+  { pattern = "api.mcpdploy.com", custom_domain = true }
+]
+
+# (the rest of your config)
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[alias]
+"raw-body"     = "./src/empty.ts"
+"content-type" = "./src/empty.ts"
+
+[dev]
+port = 3000
+
+[vars]
