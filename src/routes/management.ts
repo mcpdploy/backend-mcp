@@ -7,7 +7,6 @@ import {
     mcpProjectUpdateSchema
 } from '../lib/schemas';
 import Stripe from 'stripe';
-import { subscriptionPlanSchema, userSubscriptionSchema } from '../lib/schemas';
 import { ContentfulStatusCode } from 'hono/utils/http-status';
 
 // Define types for Hono context if not already available globally
@@ -40,7 +39,7 @@ function getPrivilegedSupabaseClient(c: any) {
 }
 
 // --- USAGE TRACKING & LIMITING HELPERS ---
-async function checkAndIncrementUsage({ userId, usageType, planField, increment = 1, customDate }: { userId: string, usageType: string, planField: string, increment?: number, customDate?: Date }) {
+export async function checkAndIncrementUsage({ userId, usageType, increment = 1, customDate }: { userId: string, usageType: string, increment?: number, customDate?: Date }) {
   // Fetch user subscription and plan
   const { data: userSub, error: userSubError } = await supabase
     .from('user_subscriptions')
@@ -85,6 +84,22 @@ async function checkAndIncrementUsage({ userId, usageType, planField, increment 
     console.warn(`[Usage Limit] User ${userId} exceeded max_custom_domains (${plan.max_custom_domains})`);
     return { allowed: false, error: `Custom domain limit reached (${plan.max_custom_domains}).`, status: 429 };
   }
+  // --- PROJECT LIMIT ENFORCEMENT ---
+  if (usageType === 'projects' && typeof plan.max_projects === 'number') {
+    // Count current projects for this user
+    const { count, error: countError } = await supabase
+      .from('mcp_servers')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    if (countError) {
+      console.error('[Usage Limit] Failed to count projects for user:', userId, countError);
+      return { allowed: false, error: 'Failed to check project limit. Please try again.', status: 500 };
+    }
+    if ((count || 0) + increment > plan.max_projects) {
+      console.warn(`[Usage Limit] User ${userId} exceeded max_projects (${plan.max_projects})`);
+      return { allowed: false, error: `Project limit reached (${plan.max_projects}).`, status: 403 };
+    }
+  }
 
   // Increment usage
   if (usageType === 'requests_today') usage.requests_today = (usage.requests_today || 0) + increment;
@@ -119,12 +134,12 @@ managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCr
 
     // --- USAGE TRACKING & LIMITING ---
     // 1. Check project limit
-    const { allowed: allowedProjects, error: errorProjects, status: statusProjects } = await checkAndIncrementUsage({ userId, usageType: 'projects', planField: 'max_projects' });
+    const { allowed: allowedProjects, error: errorProjects, status: statusProjects } = await checkAndIncrementUsage({ userId, usageType: 'projects' });
     if (!allowedProjects) return c.json({ error: errorProjects }, statusProjects ?? 500 as any);
     // 2. Check custom domain limit (if custom domains are part of projectData)
     const projectData = c.req.valid('json');
     if (Array.isArray((projectData as any).custom_domains) && (projectData as any).custom_domains.length > 0) {
-      const { allowed: allowedDomains, error: errorDomains, status: statusDomains } = await checkAndIncrementUsage({ userId, usageType: 'custom_domains', planField: 'max_custom_domains', increment: (projectData as any).custom_domains.length });
+      const { allowed: allowedDomains, error: errorDomains, status: statusDomains } = await checkAndIncrementUsage({ userId, usageType: 'custom_domains', increment: (projectData as any).custom_domains.length });
       if (!allowedDomains) return c.json({ error: errorDomains }, statusDomains ?? 500 as any);
     }
     // --- END USAGE TRACKING & LIMITING ---
@@ -213,7 +228,7 @@ managementRoutes.get('/mcp-projects/:id', async (c) => {
     .eq("user_id", userId)
     .single();
   
-  if (error || !data) return c.json({ error: "Project not found or access denied" }, 404);
+  if (error || !data) return c.json({ error: "https://mcpdploy.comt found or access denied" }, 404);
   return c.json(data);
 });
 
@@ -454,7 +469,27 @@ managementRoutes.get('/subscription/plan', async (c) => {
     .eq('user_id', userId)
     .single();
   if (error || !sub) return c.json({ error: 'No subscription found' }, 404);
-  return c.json(sub);
+  
+  // Count current projects for this user
+  const { count: projectCount, error: countError } = await supabase
+    .from('mcp_servers')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId);
+  
+  if (countError) {
+    console.error('[Subscription Plan] Failed to count projects for user:', userId, countError);
+  }
+  
+  // Add project count to the usage object
+  const enhancedSub = {
+    ...sub,
+    usage: {
+      ...sub.usage,
+      mcp_server_count: projectCount || 0
+    }
+  };
+  
+  return c.json(enhancedSub);
 });
 
 // Get all available subscription plans
@@ -561,10 +596,10 @@ managementRoutes.all('/mcp/*', async (c, next) => {
   const userId = await getUserIdFromContext(c);
   if (!userId) return c.json({ error: 'Unauthorized' }, 401 as ContentfulStatusCode);
   // Daily limit
-  const { allowed: allowedDay, error: errorDay, status: statusDay } = await checkAndIncrementUsage({ userId, usageType: 'requests_today', planField: 'max_requests_per_day' });
+  const { allowed: allowedDay, error: errorDay, status: statusDay } = await checkAndIncrementUsage({ userId, usageType: 'requests_today' });
   if (!allowedDay) return c.json({ error: errorDay }, statusDay ?? 500 as any);
   // Monthly limit
-  const { allowed: allowedMonth, error: errorMonth, status: statusMonth } = await checkAndIncrementUsage({ userId, usageType: 'requests_this_month', planField: 'max_requests_per_month' });
+  const { allowed: allowedMonth, error: errorMonth, status: statusMonth } = await checkAndIncrementUsage({ userId, usageType: 'requests_this_month' });
   if (!allowedMonth) return c.json({ error: errorMonth }, statusMonth ?? 500 as any);
   // Continue to actual handler
   await next();

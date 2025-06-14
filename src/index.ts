@@ -1,25 +1,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { z } from "zod";
-// import { validator } from "hono/validator"; // Remove this line
-// import { bearerAuth } from 'hono/bearer-auth'; // Not used directly, can be removed if not needed elsewhere
-// import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"; // No longer directly used here
-// import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"; // No longer directly used here
-/* import {
-  CallToolResult,
-  GetPromptResult,
-  ReadResourceResult,
-} from "@modelcontextprotocol/sdk/types.js"; */ // No longer directly used here
-// import { toFetchResponse, toReqRes } from "fetch-to-node"; // No longer directly used here
-import { supabase } from "./lib/supabaseClient"; // Ensure this path is correct
-import { swaggerUI } from '@hono/swagger-ui';
-import { openApiSpec } from './lib/openapi';
-// import { createClient } from "@supabase/supabase-js"; // Moved to specific files needing it
 import { supabaseAuthMiddleware } from './middleware/auth'; // Import the middleware
 import { authRoutes } from './routes/auth'; // Import the auth routes
 import { openapiRoutes } from './routes/openapi'; // Import the openapi routes
 import { managementRoutes } from './routes/management'; // Import management routes
 import { mcpDynamicHandler } from './mcp/handler'; // Import the new MCP dynamic handler
+import { supportRoutes } from './routes/support';
 
 // Define environment bindings for Cloudflare Workers
 type Env = {
@@ -73,17 +59,19 @@ app.use('/mcp-projects', supabaseAuthMiddleware);
 app.use('/mcp-projects/*', supabaseAuthMiddleware);
 // Only apply auth middleware to /subscription/plan and /stripe/create-checkout-session
 app.use('/subscription/plan', supabaseAuthMiddleware);
-app.use('/stripe/create-checkout-session', supabaseAuthMiddleware);
 app.use('/subscription/cancel', supabaseAuthMiddleware);
 app.use('/subscription/resume', supabaseAuthMiddleware);
+app.use('/stripe/create-checkout-session', supabaseAuthMiddleware);
+app.use('/auth/change-password', supabaseAuthMiddleware);
+app.use('/support/tickets', supabaseAuthMiddleware);
 
 // --- Helper: Generate HTML Info Page ---
 // REMOVE generateInfoPage function
 
 // --- Helper: Get User ID from context ---
-async function getUserIdFromContext(c: any): Promise<string | null> {
-  return c.var.userId;
-}
+// async function getUserIdFromContext(c: any): Promise<string | null> {
+//   return c.var.userId;
+// }
 
 // --- Management API Endpoints ---
 
@@ -120,5 +108,6 @@ app.route('/', authRoutes);
 
 // Mount management routes
 app.route('/', managementRoutes);
+app.route('/', supportRoutes);
 
 export default app;

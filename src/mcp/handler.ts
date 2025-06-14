@@ -1,4 +1,3 @@
-import { Hono } from 'hono'; // Or import specific types like Context if Hono instance isn't directly used
 import { z } from 'zod'; // For paramSchema construction
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -9,6 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { toFetchResponse, toReqRes } from "fetch-to-node";
 import { supabase } from "../lib/supabaseClient"; // Path to supabase client
+import { checkAndIncrementUsage } from '../routes/management';
 // Schemas might be needed if project data structure is validated or used for registration logic beyond simple iteration
 // import { baseResourceSchema, baseToolSchema, basePromptSchema } from '../lib/schemas';
 
@@ -114,6 +114,26 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
     console.log(`[mcpDynamicHandler] Project "${project.name}" (ID: ${project.id}) is not active. Returning 503.`);
     return c.json({ error: "MCP project is not active." }, 503);
   }
+  
+  // --- USAGE TRACKING & LIMITING (per project owner) ---
+  const projectOwnerId = project.user_id;
+  if (!projectOwnerId) {
+    console.error(`[mcpDynamicHandler] Project ${project.id} has no user_id (owner). Cannot track usage.`);
+    return c.json({ error: "Project misconfigured: missing owner." }, 500);
+  }
+  // Daily limit
+  const { allowed: allowedDay, error: errorDay, status: statusDay } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_today' });
+  if (!allowedDay) {
+    console.warn(`[mcpDynamicHandler] Daily quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorDay}`);
+    return c.json({ error: errorDay }, statusDay ?? 429);
+  }
+  // Monthly limit
+  const { allowed: allowedMonth, error: errorMonth, status: statusMonth } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_this_month' });
+  if (!allowedMonth) {
+    console.warn(`[mcpDynamicHandler] Monthly quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorMonth}`);
+    return c.json({ error: errorMonth }, statusMonth ?? 429);
+  }
+  // --- END USAGE TRACKING & LIMITING ---
   
   const mcpServer = new McpServer(
     { name: project.name, version: project.version || "1.0.0" },
@@ -238,8 +258,10 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
     const mcpBasePath = `/mcp/${mcpIdentifier}`;
     if (c.req.method === 'GET' && (path === mcpBasePath || path === `${mcpBasePath}/`) && (c.req.header("accept") || "").includes("text/html")) {
       console.log(`[mcpDynamicHandler] Serving HTML info page for project "${project.name}"`);
-      const requestUrl = new URL(c.req.url);
-      const baseUrl = `${requestUrl.protocol}//${requestUrl.host}`;
+     // const requestUrl = new URL(c.req.url);
+      const baseUrl = process.env.MCP_FRONTEND_BASE_URL || 'https://mcpdploy.com'; 
+      //|| 'http://localhost:3001';
+      //`${requestUrl.protocol}//${requestUrl.host}`;
       // Ensure generateInfoPage uses project.mcp_resources etc directly
       const htmlContent = generateInfoPage(mcpIdentifier, project, project.mcp_resources || [], project.mcp_tools || [], project.mcp_prompts || [], baseUrl);
       mcpServer.close();

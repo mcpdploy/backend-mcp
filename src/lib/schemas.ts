@@ -20,7 +20,7 @@ export const baseToolSchema = z.object({
 export const basePromptSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
-  template: z.string().min(1),
+  template: z.string().optional(),
   // api_url: z.string().url().optional(), // Removed as per user request
   parameters: z.record(z.string()).optional(),
   // http_method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).default("GET").optional(), // Removed as per user request
@@ -57,7 +57,7 @@ export const mcpProjectUpdateSchema = z.object({
   resources: z.array(projectSubResourceSchema).optional(),
   tools: z.array(projectSubToolSchema).optional(),
   prompts: z.array(projectSubPromptSchema).optional(),
-});
+}); 
 
 // Subscription Plan Schema
 export const subscriptionPlanSchema = z.object({

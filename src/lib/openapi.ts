@@ -303,13 +303,20 @@ export const openApiSpec = {
                 type: 'object',
                 properties: {
                   email: { type: 'string', example: 'user@example.com' },
-                  password: { type: 'string', example: 'yourpassword' }
+                  password: { 
+                    type: 'string', 
+                    example: 'MyP@ssw0rd!',
+                    description: 'Password must be at least 8 characters long and contain at least one uppercase letter and one special character',
+                    minLength: 8
+                  },
+                  name: { type: 'string', example: 'John Doe', description: 'Optional user name to store in metadata' }
                 },
                 required: ['email', 'password']
               },
               example: {
                 email: 'user@example.com',
-                password: 'yourpassword'
+                password: 'MyP@ssw0rd!',
+                name: 'John Doe'
               }
             }
           }
@@ -339,7 +346,22 @@ export const openApiSpec = {
               }
             }
           },
-          '400': { description: 'Invalid signup data' }
+          '400': { 
+            description: 'Invalid signup data or password validation failed',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { 
+                      type: 'string', 
+                      example: 'Password must contain at least one uppercase letter.'
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -488,7 +510,46 @@ export const openApiSpec = {
             description: 'Current subscription',
             content: {
               'application/json': {
-                schema: { type: 'object' }
+                schema: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', format: 'uuid' },
+                    user_id: { type: 'string', format: 'uuid' },
+                    plan_id: { type: 'string', format: 'uuid' },
+                    status: { type: 'string', enum: ['active', 'inactive', 'canceled', 'past_due', 'trialing'] },
+                    current_period_end: { type: 'string', format: 'date-time', nullable: true },
+                    usage: {
+                      type: 'object',
+                      properties: {
+                        requests_today: { type: 'integer', example: 0 },
+                        requests_this_month: { type: 'integer', example: 0 },
+                        requests_today_date: { type: 'string', format: 'date', example: '2025-06-09' },
+                        requests_this_month_date: { type: 'string', example: '2025-06' },
+                        mcp_server_count: { type: 'integer', example: 0, description: 'Current number of projects created by the user' }
+                      }
+                    },
+                    created_at: { type: 'string', format: 'date-time' },
+                    updated_at: { type: 'string', format: 'date-time' },
+                    stripe_subscription_id: { type: 'string', nullable: true },
+                    cancel_at_period_end: { type: 'boolean' },
+                    plan: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        name: { type: 'string', example: 'Free' },
+                        price: { type: 'number', example: 0 },
+                        features: { type: 'object' },
+                        created_at: { type: 'string', format: 'date-time' },
+                        updated_at: { type: 'string', format: 'date-time' },
+                        max_projects: { type: 'integer', example: 1 },
+                        stripe_price_id: { type: 'string' },
+                        max_custom_domains: { type: 'integer', example: 0 },
+                        max_requests_per_day: { type: 'integer', example: 100 },
+                        max_requests_per_month: { type: 'integer', example: 1000 }
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -563,6 +624,609 @@ export const openApiSpec = {
           '500': { description: 'Failed to resume subscription in Stripe or update status' }
         },
         security: [{ bearerAuth: [] }]
+      }
+    },
+    '/auth/resend-confirmation': {
+      post: {
+        summary: 'Resend Email Confirmation',
+        description: `Resends the email confirmation link to the specified email address. Useful when the initial confirmation email was not received or expired.\n\nThe confirmation email will redirect to /auth/verify after the user clicks the link. If you need to customize the redirect, update the backend implementation.`,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  email: { 
+                    type: 'string', 
+                    format: 'email',
+                    description: 'The email address to resend the confirmation link to',
+                    example: 'user@example.com'
+                  }
+                },
+                required: ['email']
+              },
+              example: {
+                email: 'user@example.com',
+                redirectTo: 'https://mcpdploy.com/auth/verify'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Confirmation email sent successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string', 
+                      example: 'Confirmation email sent successfully. Please check your inbox.'
+                    },
+                    debug: {
+                      type: 'object',
+                      properties: {
+                        email: { type: 'string', example: 'user@example.com' },
+                        redirectTo: { type: 'string', example: 'https://your-site.com/auth/verify' },
+                        supabaseError: { type: 'object', nullable: true }
+                      }
+                    }
+                  }
+                },
+                example: {
+                  message: 'Confirmation email sent successfully. Please check your inbox.',
+                  debug: {
+                    email: 'user@example.com',
+                    redirectTo: 'https://your-site.com/auth/verify',
+                    supabaseError: null
+                  }
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Invalid request',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Email is required.' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/auth/change-password': {
+      post: {
+        summary: 'Change Password',
+        description: 'Changes the password for the authenticated user. Requires the current password for verification.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  currentPassword: { 
+                    type: 'string', 
+                    description: 'The user\'s current password',
+                    example: 'OldP@ssw0rd!'
+                  },
+                  newPassword: { 
+                    type: 'string', 
+                    description: 'The new password must be at least 8 characters long and contain at least one uppercase letter and one special character',
+                    example: 'NewP@ssw0rd!',
+                    minLength: 8
+                  }
+                },
+                required: ['currentPassword', 'newPassword']
+              },
+              example: {
+                currentPassword: 'OldP@ssw0rd!',
+                newPassword: 'NewP@ssw0rd!'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Password changed successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string', 
+                      example: 'Password updated successfully.'
+                    },
+                    user: { type: 'object' }
+                  }
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Invalid request or incorrect current password',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Current password is incorrect.' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - missing or invalid token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Authorization header required' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/auth/forgot-password': {
+      post: {
+        summary: 'Request Password Reset',
+        description: 'Sends a password reset email to the specified email address. For security reasons, always returns success even if the email doesn\'t exist.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  email: { 
+                    type: 'string', 
+                    format: 'email',
+                    description: 'The email address to send the password reset link to',
+                    example: 'user@example.com'
+                  },
+                  redirectTo: {
+                    type: 'string',
+                    format: 'url',
+                    description: 'Optional URL to redirect to after the user clicks the reset link',
+                    example: 'https://mcpdploy.com/reset-password'
+                  }
+                },
+                required: ['email']
+              },
+              example: {
+                email: 'user@example.com',
+                redirect_to: 'https://mcpdploy.com/reset-password'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Request processed successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string', 
+                      example: 'If an account exists with this email, a password reset link has been sent.'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Invalid request',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Email is required.' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/auth/reset-password': {
+      post: {
+        summary: 'Reset Password with Token',
+        description: 'Resets the user\'s password using the access token received from the password reset email link.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  accessToken: { 
+                    type: 'string', 
+                    description: 'The access token from the password reset email link',
+                    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+                  },
+                  newPassword: { 
+                    type: 'string', 
+                    description: 'The new password must be at least 8 characters long and contain at least one uppercase letter and one special character',
+                    example: 'NewP@ssw0rd!',
+                    minLength: 8
+                  }
+                },
+                required: ['accessToken', 'newPassword']
+              },
+              example: {
+                accessToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+                newPassword: 'NewP@ssw0rd!'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Password reset successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string', 
+                      example: 'Password has been reset successfully.'
+                    },
+                    user: { type: 'object' }
+                  }
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Invalid request or password validation failed',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Password must contain at least one uppercase letter.' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Invalid or expired token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Failed to reset password. The reset link may be expired or invalid.' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/support/contact': {
+      post: {
+        summary: 'Submit Support Request',
+        description: 'Submit a support request. Can be used by both authenticated and anonymous users.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  subject: { 
+                    type: 'string', 
+                    description: 'The subject of the support request',
+                    example: 'Unable to create new project'
+                  },
+                  message: { 
+                    type: 'string', 
+                    description: 'Detailed description of the issue or question',
+                    example: 'I am getting an error when trying to create a new MCP project...'
+                  },
+                  category: { 
+                    type: 'string', 
+                    description: 'Category of the support request',
+                    enum: ['general', 'technical', 'billing', 'feature-request', 'bug-report'],
+                    example: 'technical'
+                  }
+                },
+                required: ['subject', 'message']
+              },
+              example: {
+                subject: 'Unable to create new project',
+                message: 'I am getting an error when trying to create a new MCP project. The error says "Project limit reached" but I should have more projects available.',
+                category: 'technical'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Support request submitted successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string', 
+                      example: 'Support request received. We\'ll get back to you soon.'
+                    },
+                    ticketId: { 
+                      type: 'string',
+                      format: 'uuid',
+                      description: 'The ID of the created support ticket'
+                    },
+                    estimatedResponseTime: {
+                      type: 'string',
+                      example: '24-48 hours'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Invalid request',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Subject and message are required.' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Failed to submit support request.' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/support/tickets': {
+      get: {
+        summary: 'Get User Support Tickets',
+        description: 'Retrieve all support tickets for the authenticated user.',
+        responses: {
+          '200': {
+            description: 'List of support tickets',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string', format: 'uuid' },
+                      user_id: { type: 'string', format: 'uuid' },
+                      user_email: { type: 'string', format: 'email' },
+                      user_name: { type: 'string', nullable: true },
+                      subject: { type: 'string' },
+                      message: { type: 'string' },
+                      category: { type: 'string' },
+                      status: { type: 'string', enum: ['open', 'in-progress', 'resolved', 'closed'] },
+                      created_at: { type: 'string', format: 'date-time' },
+                      updated_at: { type: 'string', format: 'date-time', nullable: true }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Unauthorized' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Failed to fetch support tickets.' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/auth/verify-token': {
+      post: {
+        summary: 'Verify Email Confirmation',
+        description: 'Verifies the user\'s email using the access token received from the confirmation email link. Returns the user object and token info if successful and the email is confirmed.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  access_token: {
+                    type: 'string',
+                    description: 'The access token from the confirmation email link',
+                    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+                  }
+                },
+                required: ['access_token']
+              },
+              example: {
+                access_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Email verified and user/token returned',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    access_token: { type: 'string', description: 'The JWT access token used for verification' },
+                    token_type: { type: 'string', example: 'bearer' },
+                    expires_in: { type: ['integer', 'null'], example: null, description: 'Token expiry in seconds (null if not available)' },
+                    refresh_token: { type: ['string', 'null'], example: null, description: 'Refresh token (null if not available)' },
+                    user: { type: 'object', description: 'The verified user object' }
+                  }
+                },
+                example: {
+                  access_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+                  token_type: 'bearer',
+                  expires_in: null,
+                  refresh_token: null,
+                  user: {
+                    id: 'uuid',
+                    email: 'user@example.com',
+                    confirmed_at: '2024-06-10T12:00:00.000Z',
+                    // ...other user fields
+                  }
+                }
+              }
+            }
+          },
+          '400': {
+            description: 'Missing or invalid access token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Access token is required.' }
+                  }
+                }
+              }
+            }
+          },
+          '403': {
+            description: 'Email not confirmed or invalid/expired token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Email not confirmed.' }
+                  }
+                }
+              }
+            }
+          },
+          '500': {
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
