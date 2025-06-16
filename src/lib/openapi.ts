@@ -75,6 +75,7 @@ export const openApiSpec = {
           name: { type: 'string', example: 'My Awesome Project' },
           description: { type: 'string', example: 'A truly awesome project.', nullable: true },
           version: { type: 'string', example: '1.0.1', nullable: true },
+          is_private: { type: 'boolean', example: false },
           api_key: { type: 'string', readOnly: true, example: 'xxxx-xxxx-xxxx-xxxx' },
           endpoint: { type: 'string', format: 'url', readOnly: true, example: 'http://localhost:3000/mcp/my-awesome-project-00000000' },
           is_active: { type: 'boolean', default: true },
@@ -118,6 +119,7 @@ export const openApiSpec = {
                   name: { type: 'string', example: 'My MCP Project' },
                   description: { type: 'string', example: 'A description of the project.', nullable: true },
                   version: { type: 'string', example: '1.0.0', nullable: true },
+                  is_private: { type: 'boolean', example: false },
                   resources: { type: 'array', items: { $ref: '#/components/schemas/BaseResource' }, nullable: true },
                   tools: { type: 'array', items: { $ref: '#/components/schemas/BaseTool' }, nullable: true },
                   prompts: { type: 'array', items: { $ref: '#/components/schemas/BasePrompt' }, nullable: true }
@@ -128,6 +130,7 @@ export const openApiSpec = {
                 name: 'My Test Project',
                 description: 'A project for testing.',
                 version: '0.1.0',
+                is_private: false,
                 resources: [
                   { name: 'Config File', uri_pattern: '/config.json', api_url: 'https://example.com/api/config', headers: { 'X-API-KEY': 'mysecretkey' } }
                 ],
@@ -190,6 +193,7 @@ export const openApiSpec = {
                   name: { type: 'string', example: 'My Updated MCP Project', nullable: true },
                   description: { type: 'string', example: 'An updated description.', nullable: true },
                   version: { type: 'string', example: '1.0.1', nullable: true },
+                  is_private: { type: 'boolean', example: false, nullable: true },
                   is_active: { type: 'boolean', example: true, nullable: true },
                   resources: { type: 'array', items: { $ref: '#/components/schemas/ProjectSubResource' }, nullable: true },
                   tools: { type: 'array', items: { $ref: '#/components/schemas/ProjectSubTool' }, nullable: true },
@@ -200,6 +204,7 @@ export const openApiSpec = {
                 name: 'My Super Project - Updated',
                 description: 'Now with more awesomeness and full sub-item management.',
                 version: '1.1.0',
+                is_private: false,
                 is_active: true,
                 resources: [
                   { id: 'existing-resource-uuid', name: 'Main Data Source', uri_pattern: '/data/main.json', api_url: 'https://example.com/api/main', headers: { 'Authorization': 'Bearer mysecretkey' } },

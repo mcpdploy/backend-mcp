@@ -138,14 +138,15 @@ managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCr
     if (!allowedProjects) return c.json({ error: errorProjects }, statusProjects ?? 500 as any);
     // 2. Check custom domain limit (if custom domains are part of projectData)
     const projectData = c.req.valid('json');
+    const isPrivate = (projectData as any).is_private ?? false;
+    const projectId = crypto.randomUUID();
+    const apiKey = isPrivate ? crypto.randomUUID() : '';
     if (Array.isArray((projectData as any).custom_domains) && (projectData as any).custom_domains.length > 0) {
       const { allowed: allowedDomains, error: errorDomains, status: statusDomains } = await checkAndIncrementUsage({ userId, usageType: 'custom_domains', increment: (projectData as any).custom_domains.length });
       if (!allowedDomains) return c.json({ error: errorDomains }, statusDomains ?? 500 as any);
     }
     // --- END USAGE TRACKING & LIMITING ---
 
-    const projectId = crypto.randomUUID();
-    const apiKey = crypto.randomUUID();
     const slug = projectData.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     
     const frontendUrl = process.env.MCP_FRONTEND_BASE_URL || 'https://mcpdploy.com'; // fallback
@@ -161,6 +162,7 @@ managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCr
         description: projectData.description,
         version: projectData.version,
         user_id: userId,
+        is_private: isPrivate,
         api_key: apiKey,
         endpoint,
         is_active: true
@@ -240,11 +242,12 @@ managementRoutes.put('/mcp-projects/:id', validator('json', (value) => mcpProjec
   const supabasePrivileged = getPrivilegedSupabaseClient(c);
 
   try {
-    const { name, description, version, is_active, resources, tools, prompts } = projectUpdateData;
+    const { name, description, version, is_private, is_active, resources, tools, prompts } = projectUpdateData;
     const mainProjectDataToUpdate: any = {};
     if (name !== undefined) mainProjectDataToUpdate.name = name;
     if (description !== undefined) mainProjectDataToUpdate.description = description;
     if (version !== undefined) mainProjectDataToUpdate.version = version;
+    if (is_private !== undefined) mainProjectDataToUpdate.is_private = is_private;
     if (is_active !== undefined) mainProjectDataToUpdate.is_active = is_active; 
 
     if (Object.keys(mainProjectDataToUpdate).length > 0) {

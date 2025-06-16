@@ -110,6 +110,16 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
 
   console.log(`[mcpDynamicHandler] Successfully fetched project: "${project.name}" (ID: ${project.id})`);
 
+  // --- API Key Enforcement for private projects ---
+  if (project.is_private) {
+    const apiKeyHeader = c.req.header("X-API-Key");
+    if (!apiKeyHeader || apiKeyHeader !== project.api_key) {
+      console.warn(`[mcpDynamicHandler] Invalid or missing API key for private project ${project.id}`);
+      return c.json({ error: "Unauthorized: Invalid or missing API key" }, 401);
+    }
+  }
+  // --- End API Key Enforcement ---
+
   if (!project.is_active) {
     console.log(`[mcpDynamicHandler] Project "${project.name}" (ID: ${project.id}) is not active. Returning 503.`);
     return c.json({ error: "MCP project is not active." }, 503);
