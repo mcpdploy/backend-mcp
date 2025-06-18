@@ -76,6 +76,7 @@ export const openApiSpec = {
           description: { type: 'string', example: 'A truly awesome project.', nullable: true },
           version: { type: 'string', example: '1.0.1', nullable: true },
           is_private: { type: 'boolean', example: false },
+          session_management: { type: 'boolean', example: false, description: 'Enable stateful session management' },
           api_key: { type: 'string', readOnly: true, example: 'xxxx-xxxx-xxxx-xxxx' },
           endpoint: { type: 'string', format: 'url', readOnly: true, example: 'http://localhost:3000/mcp/my-awesome-project-00000000' },
           is_active: { type: 'boolean', default: true },
@@ -120,6 +121,7 @@ export const openApiSpec = {
                   description: { type: 'string', example: 'A description of the project.', nullable: true },
                   version: { type: 'string', example: '1.0.0', nullable: true },
                   is_private: { type: 'boolean', example: false },
+                  session_management: { type: 'boolean', example: false, description: 'Enable stateful session management' },
                   resources: { type: 'array', items: { $ref: '#/components/schemas/BaseResource' }, nullable: true },
                   tools: { type: 'array', items: { $ref: '#/components/schemas/BaseTool' }, nullable: true },
                   prompts: { type: 'array', items: { $ref: '#/components/schemas/BasePrompt' }, nullable: true }
@@ -131,6 +133,7 @@ export const openApiSpec = {
                 description: 'A project for testing.',
                 version: '0.1.0',
                 is_private: false,
+                session_management: false,
                 resources: [
                   { name: 'Config File', uri_pattern: '/config.json', api_url: 'https://example.com/api/config', headers: { 'X-API-KEY': 'mysecretkey' } }
                 ],
@@ -194,6 +197,7 @@ export const openApiSpec = {
                   description: { type: 'string', example: 'An updated description.', nullable: true },
                   version: { type: 'string', example: '1.0.1', nullable: true },
                   is_private: { type: 'boolean', example: false, nullable: true },
+                  session_management: { type: 'boolean', example: true, nullable: true, description: 'Enable stateful session management' },
                   is_active: { type: 'boolean', example: true, nullable: true },
                   resources: { type: 'array', items: { $ref: '#/components/schemas/ProjectSubResource' }, nullable: true },
                   tools: { type: 'array', items: { $ref: '#/components/schemas/ProjectSubTool' }, nullable: true },
@@ -206,6 +210,7 @@ export const openApiSpec = {
                 version: '1.1.0',
                 is_private: false,
                 is_active: true,
+                session_management: true,
                 resources: [
                   { id: 'existing-resource-uuid', name: 'Main Data Source', uri_pattern: '/data/main.json', api_url: 'https://example.com/api/main', headers: { 'Authorization': 'Bearer mysecretkey' } },
                   { name: 'New Auxiliary Data', uri_pattern: '/data/aux.json', api_url: 'http://example.com/aux-proxy', headers: { 'X-API-KEY': 'newsecretkey' } }

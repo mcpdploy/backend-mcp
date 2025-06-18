@@ -26,5 +26,5 @@ enabled = true
 [dev]
 port = 3000
 
-[vars]
+
 

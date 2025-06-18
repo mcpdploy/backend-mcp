@@ -5,12 +5,15 @@ import {
   CallToolResult,
   GetPromptResult,
   ReadResourceResult,
+  isInitializeRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { toFetchResponse, toReqRes } from "fetch-to-node";
 import { supabase } from "../lib/supabaseClient"; // Path to supabase client
 import { checkAndIncrementUsage } from '../routes/management';
-// Schemas might be needed if project data structure is validated or used for registration logic beyond simple iteration
-// import { baseResourceSchema, baseToolSchema, basePromptSchema } from '../lib/schemas';
+import { randomUUID } from "node:crypto";
+
+// Global map to store active session transports
+const sessionTransports: Record<string, StreamableHTTPServerTransport> = {};
 
 // Helper: Generate HTML Info Page (Copied from index.ts)
 function generateInfoPage(
@@ -254,6 +257,85 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
   });
   
   console.log("[mcpDynamicHandler] Capabilities registration phase complete.");
+
+  // Session management branch: stateful handling if enabled
+  if ((project as any).session_management) {
+    const sessionIdHeader = c.req.header("mcp-session-id");
+    console.log("line 264: Session management enabled; mcp-session-id header:", sessionIdHeader);
+    const { req, res } = toReqRes(c.req.raw);
+
+    // Streaming via GET/DELETE: reuse transport without awaiting
+    if (c.req.method === 'GET' || c.req.method === 'DELETE') {
+      if (!sessionIdHeader || !sessionTransports[sessionIdHeader]) {
+        console.error(`[mcpDynamicHandler] Invalid or missing session ID for ${c.req.method}; header: ${sessionIdHeader}`);
+        return c.json(
+          { jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: No valid session ID provided" }, id: null },
+          400
+        );
+      }
+      const transport = sessionTransports[sessionIdHeader];
+      console.log(`[mcpDynamicHandler] Reusing session transport for ${c.req.method} with ID: ${sessionIdHeader}`);
+      transport.handleRequest(req, res).catch(err => {
+        console.error("[mcpDynamicHandler] transport.handleRequest error:", err);
+      });
+      return toFetchResponse(res);
+    }
+
+    // JSON-RPC via POST/others: parse JSON payload
+    let mcpPayload: any = null;
+    if (c.req.header('content-type')?.includes('application/json')) {
+      try {
+        mcpPayload = await c.req.json();
+        console.log("[mcpDynamicHandler] Session payload:", JSON.stringify(mcpPayload));
+      } catch (e) {
+        console.error("[mcpDynamicHandler] Error parsing JSON payload for session:", e);
+        return c.json(
+          { jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null },
+          400
+        );
+      }
+    }
+
+    let transport: StreamableHTTPServerTransport;
+    if (sessionIdHeader && sessionTransports[sessionIdHeader]) {
+      transport = sessionTransports[sessionIdHeader];
+      console.log(`[mcpDynamicHandler] Reusing existing session transport with ID: ${sessionIdHeader}`);
+    } else if (!sessionIdHeader && isInitializeRequest(mcpPayload)) {
+      console.log("[mcpDynamicHandler] Initializing new session");
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: randomUUID,
+        onsessioninitialized: (sessionId) => {
+          console.log(`[mcpDynamicHandler] New session initialized with ID: ${sessionId}`);
+          sessionTransports[sessionId] = transport;
+        },
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          console.log(`[mcpDynamicHandler] Session closed, cleaning up transport with ID: ${transport.sessionId}`);
+          delete sessionTransports[transport.sessionId];
+        }
+      };
+      await mcpServer.connect(transport);
+    } else {
+      console.error(`[mcpDynamicHandler] Bad request for session management: missing or invalid session ID; header: ${sessionIdHeader}`);
+      return c.json(
+        { jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: No valid session ID provided" }, id: null },
+        400
+      );
+    }
+
+    try {
+      console.log("[mcpDynamicHandler] Handling session request");
+      await transport.handleRequest(req, res, mcpPayload);
+      return toFetchResponse(res);
+    } catch (transportError) {
+      console.error("[mcpDynamicHandler] Error during session transport handleRequest:", transportError);
+      return c.json(
+        { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error during MCP transport." }, id: null },
+        500
+      );
+    }
+  }
 
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   

@@ -45,6 +45,7 @@ export const mcpProjectCreateSchema = z.object({
   description: z.string().optional(),
   version: z.string().optional(),
   is_private: z.boolean().optional(),
+  session_management: z.boolean().optional().default(false),
   resources: z.array(baseResourceSchema).optional(),
   tools: z.array(baseToolSchema).optional(),
   prompts: z.array(basePromptSchema).optional(),
@@ -56,10 +57,11 @@ export const mcpProjectUpdateSchema = z.object({
   version: z.string().optional(),
   is_private: z.boolean().optional(),
   is_active: z.boolean().optional(),
+  session_management: z.boolean().optional(),
   resources: z.array(projectSubResourceSchema).optional(),
   tools: z.array(projectSubToolSchema).optional(),
   prompts: z.array(projectSubPromptSchema).optional(),
-});
+}); 
 
 // Subscription Plan Schema
 export const subscriptionPlanSchema = z.object({
