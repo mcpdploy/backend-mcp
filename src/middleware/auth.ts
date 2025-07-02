@@ -41,7 +41,5 @@ export const supabaseAuthMiddleware: MiddlewareHandler<any> = async (c, next) =>
   } else {
     c.set('userId', null); // No token, no user
   }
-  // This log seems redundant if the first one logs the same thing, consider removing or changing.
-  // console.log("[supabaseAuthMiddleware] Authorization header (masked):", authHeader ? (authHeader.substring(0, 7) + "..." + (authHeader?.substring(authHeader.length - 4) || "")) : "missing");
   await next();
 }; 

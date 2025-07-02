@@ -22,31 +22,310 @@ export const openApiSpec = {
         type: 'object',
         properties: {
           name: { type: 'string', minLength: 1, example: 'My Resource' },
-          uri_pattern: { type: 'string', minLength: 1, example: '/data/config.json' },
+          uri: { type: 'string', minLength: 1, example: 'resource://data/config.json', description: 'URI for the resource. Use proper URI schemes like resource://, file://, http://, etc.' },
+          resource_type: { 
+            type: 'string', 
+            enum: ['static', 'dynamic', 'context_aware'], 
+            default: 'static',
+            description: 'Type of resource: static (fixed URI), dynamic (parameterized URI), or context_aware (with completion)'
+          },
+          parameters: {
+            type: 'object',
+            additionalProperties: {
+              type: 'object',
+              properties: {
+                description: { type: 'string' },
+                type: { type: 'string' },
+                required: { type: 'boolean' }
+              }
+            },
+            example: { 
+              userId: { 
+                description: 'The user ID', 
+                type: 'string', 
+                required: true 
+              } 
+            },
+            description: 'Parameter definitions for dynamic resources'
+          },
+          completion_config: {
+            type: 'object',
+            description: 'Completion configuration for context-aware resources. Define completion strategies for template parameters.',
+            properties: {
+              complete: {
+                type: 'object',
+                description: 'Map of parameter names to completion configurations',
+                additionalProperties: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      properties: {
+                        type: { type: 'string', enum: ['static'], description: 'Static list of completions' },
+                        values: { type: 'array', items: { type: 'string' }, description: 'List of possible values' }
+                      },
+                      required: ['type', 'values']
+                    },
+                    {
+                      type: 'object',
+                      properties: {
+                        type: { type: 'string', enum: ['conditional'], description: 'Conditional completions based on other parameters' },
+                        conditions: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              when: { type: 'object', description: 'Conditions that must match (parameter: value pairs)' },
+                              values: { type: 'array', items: { type: 'string' }, description: 'Values to return when conditions match' }
+                            },
+                            required: ['when', 'values']
+                          }
+                        },
+                        default: { type: 'array', items: { type: 'string' }, description: 'Default values if no conditions match' }
+                      },
+                      required: ['type', 'conditions']
+                    }
+                  ]
+                }
+              }
+            },
+            example: {
+              complete: {
+                repo: {
+                  type: 'conditional',
+                  conditions: [
+                    {
+                      when: { owner: 'org1' },
+                      values: ['project1', 'project2', 'project3']
+                    },
+                    {
+                      when: { owner: 'org2' },
+                      values: ['app1', 'app2', 'app3']
+                    }
+                  ],
+                  default: ['default-repo']
+                }
+              }
+            }
+          },
+          static_content: { 
+            type: 'string', 
+            example: 'This is static content for the resource',
+            description: 'Static content to return when no api_url is provided'
+          },
+          mime_type: { 
+            type: 'string', 
+            default: 'application/json',
+            example: 'text/plain',
+            description: 'MIME type of the resource content'
+          },
+          title: { 
+            type: 'string', 
+            example: 'Application Configuration',
+            description: 'Human-readable title for the resource'
+          },
+          description: { 
+            type: 'string', 
+            example: 'Application configuration data',
+            description: 'Description of what the resource provides'
+          },
           api_url: { type: 'string', format: 'url', example: 'https://api.example.com/resource_proxy', nullable: true },
-          headers: { type: 'object', additionalProperties: { type: 'string' }, example: { 'Authorization': 'Bearer some_token' }, nullable: true }
+          headers: { type: 'object', additionalProperties: { type: 'string' }, example: { 'X-API-KEY': 'mysecretkey' }, nullable: true }
         },
-        required: ['name', 'uri_pattern']
+        required: ['name', 'uri']
       },
       BaseTool: {
         type: 'object',
         properties: {
-          name: { type: 'string', minLength: 1, example: 'Data Fetcher Tool' },
-          description: { type: 'string', example: 'Fetches data from an external API.', nullable: true },
-          api_url: { type: 'string', format: 'url', example: 'https://api.example.com/fetch-data', nullable: true },
-          headers: { type: 'object', additionalProperties: { type: 'string' }, example: { 'X-API-Key': 'secretkey' }, nullable: true },
-          parameters: { type: 'object', additionalProperties: { type: 'string' }, example: { query: 'search term description' }, nullable: true },
-          http_method: { type: 'string', enum: ["GET", "POST", "PUT", "DELETE", "PATCH"], default: "GET", nullable: true }
+          name: { type: 'string', minLength: 1, example: 'calculate-bmi' },
+          title: { type: 'string', example: 'BMI Calculator', nullable: true },
+          description: { type: 'string', example: 'Calculate Body Mass Index', nullable: true },
+          tool_type: { 
+            type: 'string', 
+            enum: ['static', 'api', 'resource_link'],
+            default: 'static',
+            nullable: true,
+            description: 'Type of tool: static (simple calculations), api (external API calls), or resource_link (returns resource links)'
+          },
+          parameters: { 
+            type: 'object', 
+            additionalProperties: {
+              oneOf: [
+                { type: 'string' },
+                {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['string', 'number', 'boolean', 'array', 'object'] },
+                    description: { type: 'string' },
+                    required: { type: 'boolean', default: true },
+                    default: { }
+                  }
+                }
+              ]
+            },
+            example: { 
+              city: { type: 'string', description: 'City name', required: true }
+            }, 
+            nullable: true 
+          },
+          static_result: { 
+            type: 'string', 
+            example: 'BMI: {weightKg} / ({heightM} * {heightM}) = calculated value', 
+            nullable: true, 
+            description: 'Static result template for simple tools. Use {paramName} to reference parameters.' 
+          },
+          api_url: { 
+            type: 'string', 
+            format: 'url', 
+            example: 'https://wttr.in/{city}?format=j1', 
+            nullable: true, 
+            description: 'API endpoint for async tools. Parameters in URL path (e.g., {city}) are replaced with actual values.' 
+          },
+          headers: { type: 'object', additionalProperties: { type: 'string' }, example: { 'Accept': 'application/json' }, nullable: true },
+          http_method: { type: 'string', enum: ["GET", "POST", "PUT", "DELETE", "PATCH"], default: "GET", nullable: true },
+          resource_links: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                uri: { type: 'string', example: 'file:///project/README.md' },
+                name: { type: 'string', example: 'README.md' },
+                mimeType: { type: 'string', example: 'text/markdown' },
+                description: { type: 'string', example: 'A README file' }
+              },
+              required: ['uri', 'name']
+            },
+            nullable: true,
+            description: 'Static resource links for tools that return file/resource references'
+          },
+          resource_links_header: { 
+            type: 'string', 
+            example: 'Found files matching "{pattern}":', 
+            nullable: true,
+            description: 'Optional header text for resource links. Use {paramName} to reference parameters.'
+          }
         },
         required: ['name']
       },
       BasePrompt: {
         type: 'object',
         properties: {
-          name: { type: 'string', minLength: 1, example: 'Summarization Prompt' },
-          description: { type: 'string', example: 'Generates a summary for a given text.', nullable: true },
-          template: { type: 'string', minLength: 1, example: 'Summarize this: {{text_input}}' },
-          parameters: { type: 'object', additionalProperties: { type: 'string' }, example: { text_input: 'The text to summarize' }, nullable: true }
+          name: { type: 'string', minLength: 1, example: 'review-code' },
+          title: { type: 'string', example: 'Code Review', nullable: true },
+          description: { type: 'string', example: 'Review code for best practices and potential issues', nullable: true },
+          prompt_type: { 
+            type: 'string', 
+            enum: ['basic', 'context_aware'], 
+            default: 'basic', 
+            example: 'basic', 
+            nullable: true,
+            description: 'Type of prompt: basic (simple template) or context_aware (with completion configuration)'
+          },
+          template: { type: 'string', minLength: 1, example: 'Please review this code:\n\n{{code}}' },
+          role: { type: 'string', enum: ['user', 'assistant'], default: 'user', example: 'user', nullable: true },
+          arguments: { 
+            type: 'object',
+            description: 'MCP-compliant prompt arguments (preferred over parameters)',
+            additionalProperties: {
+              oneOf: [
+                { type: 'string' },
+                {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['string', 'number', 'boolean', 'array', 'object'] },
+                    description: { type: 'string' },
+                    required: { type: 'boolean', default: true },
+                    default: { }
+                  }
+                }
+              ]
+            },
+            example: { 
+              code: { type: 'string', description: 'The code to review', required: true }
+            }, 
+            nullable: true 
+          },
+          parameters: { 
+            type: 'object',
+            description: 'Legacy field for backward compatibility. Use arguments instead for MCP compliance.',
+            additionalProperties: {
+              oneOf: [
+                { type: 'string' },
+                {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['string', 'number', 'boolean', 'array', 'object'] },
+                    description: { type: 'string' },
+                    required: { type: 'boolean', default: true },
+                    default: { }
+                  }
+                }
+              ]
+            },
+            example: { 
+              code: { type: 'string', description: 'The code to review', required: true }
+            }, 
+            nullable: true 
+          },
+          completion_config: {
+            type: 'object',
+            description: 'Completion configuration for context-aware prompts. Define completion strategies for template parameters.',
+            properties: {
+              complete: {
+                type: 'object',
+                description: 'Map of parameter names to completion configurations',
+                additionalProperties: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      properties: {
+                        type: { type: 'string', enum: ['static'], description: 'Static list of completions' },
+                        values: { type: 'array', items: { type: 'string' }, description: 'List of possible values' }
+                      },
+                      required: ['type', 'values']
+                    },
+                    {
+                      type: 'object',
+                      properties: {
+                        type: { type: 'string', enum: ['conditional'], description: 'Conditional completions based on other parameters' },
+                        conditions: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              when: { type: 'object', description: 'Conditions that must match (parameter: value pairs)' },
+                              values: { type: 'array', items: { type: 'string' }, description: 'Values to return when conditions match' }
+                            },
+                            required: ['when', 'values']
+                          }
+                        },
+                        default: { type: 'array', items: { type: 'string' }, description: 'Default values if no conditions match' }
+                      },
+                      required: ['type', 'conditions']
+                    }
+                  ]
+                }
+              }
+            },
+            nullable: true,
+            example: {
+              complete: {
+                department: {
+                  type: 'static',
+                  values: ['engineering', 'sales', 'marketing', 'support']
+                },
+                name: {
+                  type: 'conditional',
+                  conditions: [
+                    {
+                      when: { department: 'engineering' },
+                      values: ['Alice', 'Bob', 'Charlie']
+                    }
+                  ],
+                  default: ['Guest']
+                }
+              }
+            }
+          }
         },
         required: ['name', 'template']
       },
@@ -76,7 +355,10 @@ export const openApiSpec = {
           description: { type: 'string', example: 'A truly awesome project.', nullable: true },
           version: { type: 'string', example: '1.0.1', nullable: true },
           is_private: { type: 'boolean', example: false },
+          visible: { type: 'boolean', example: false, description: 'Whether this project is visible in public listings' },
           session_management: { type: 'boolean', example: false, description: 'Enable stateful session management' },
+          tags: { type: 'array', items: { type: 'string' }, example: ['AI', 'Automation', 'API'], nullable: true, description: 'Tags for categorizing and organizing projects' },
+          category: { type: 'string', example: 'Development', nullable: true, description: 'Main category or domain of the project' },
           api_key: { type: 'string', readOnly: true, example: 'xxxx-xxxx-xxxx-xxxx' },
           endpoint: { type: 'string', format: 'url', readOnly: true, example: 'http://localhost:3000/mcp/my-awesome-project-00000000' },
           is_active: { type: 'boolean', default: true },
@@ -121,7 +403,10 @@ export const openApiSpec = {
                   description: { type: 'string', example: 'A description of the project.', nullable: true },
                   version: { type: 'string', example: '1.0.0', nullable: true },
                   is_private: { type: 'boolean', example: false },
+                  visible: { type: 'boolean', example: false, description: 'Whether this project is visible in public listings' },
                   session_management: { type: 'boolean', example: false, description: 'Enable stateful session management' },
+                  tags: { type: 'array', items: { type: 'string' }, example: ['AI', 'Automation', 'API'], nullable: true, description: 'Tags for categorizing and organizing projects' },
+                  category: { type: 'string', example: 'Development', nullable: true, description: 'Main category or domain of the project' },
                   resources: { type: 'array', items: { $ref: '#/components/schemas/BaseResource' }, nullable: true },
                   tools: { type: 'array', items: { $ref: '#/components/schemas/BaseTool' }, nullable: true },
                   prompts: { type: 'array', items: { $ref: '#/components/schemas/BasePrompt' }, nullable: true }
@@ -133,15 +418,238 @@ export const openApiSpec = {
                 description: 'A project for testing.',
                 version: '0.1.0',
                 is_private: false,
+                visible: true,
                 session_management: false,
+                tags: ['AI', 'Automation', 'API'],
+                category: 'Development',
                 resources: [
-                  { name: 'Config File', uri_pattern: '/config.json', api_url: 'https://example.com/api/config', headers: { 'X-API-KEY': 'mysecretkey' } }
+                  { 
+                    name: 'Config File', 
+                    resource_type: 'static',
+                    uri: 'resource://config.json', 
+                    title: 'Application Configuration',
+                    description: 'Main configuration file with static content',
+                    mime_type: 'application/json',
+                    static_content: '{"version": "1.0", "features": {"auth": true, "api": true}}' 
+                  },
+                  {
+                    name: 'Bitcoin Price',
+                    resource_type: 'static',
+                    uri: 'resource://crypto/btc-price',
+                    title: 'Current Bitcoin Price',
+                    description: 'Fetches current Bitcoin price from CoinGecko API',
+                    mime_type: 'application/json',
+                    api_url: 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
+                    headers: { 'Accept': 'application/json' }
+                  },
+                  {
+                    name: 'User Profile',
+                    resource_type: 'dynamic',
+                    uri: 'github://users/{username}',
+                    title: 'GitHub User Profile',
+                    description: 'Fetches GitHub user profile information',
+                    parameters: {
+                      username: {
+                        description: 'GitHub username',
+                        type: 'string',
+                        required: true
+                      }
+                    },
+                    api_url: 'https://api.github.com/users/{username}',
+                    headers: { 
+                      'Accept': 'application/vnd.github.v3+json',
+                      'User-Agent': 'MCP-Server'
+                    }
+                  },
+                  {
+                    name: 'Weather Data',
+                    resource_type: 'dynamic',
+                    uri: 'weather://{city}',
+                    title: 'City Weather Information',
+                    description: 'Current weather data for a city',
+                    parameters: {
+                      city: {
+                        description: 'City name (e.g., London, New York)',
+                        type: 'string',
+                        required: true
+                      }
+                    },
+                    api_url: 'https://wttr.in/{city}?format=j1',
+                    headers: { 'Accept': 'application/json' }
+                  },
+                  {
+                    name: 'repository',
+                    resource_type: 'context_aware',
+                    uri: 'github://repos/{owner}/{repo}',
+                    title: 'GitHub Repository',
+                    description: 'Repository information',
+                    parameters: {
+                      owner: {
+                        description: 'Repository owner',
+                        type: 'string',
+                        required: true
+                      },
+                      repo: {
+                        description: 'Repository name',
+                        type: 'string',
+                        required: true
+                      }
+                    },
+                    completion_config: {
+                      complete: {
+                        repo: {
+                          type: 'conditional',
+                          conditions: [
+                            {
+                              when: { owner: 'org1' },
+                              values: ['project1', 'project2', 'project3']
+                            },
+                            {
+                              when: { owner: 'microsoft' },
+                              values: ['vscode', 'typescript', 'playwright', 'terminal']
+                            },
+                            {
+                              when: { owner: 'facebook' },
+                              values: ['react', 'react-native', 'jest', 'flow']
+                            }
+                          ],
+                          default: ['default-repo', 'sample-repo']
+                        }
+                      }
+                    },
+                    static_content: 'Repository: {owner}/{repo}'
+                  }
                 ],
                 tools: [
-                  { name: 'Echo Tool', description: 'Echoes input.', api_url: 'https://example.com/api/echo', headers: { 'X-Custom-Header': 'SomeValue' }, http_method: 'POST', parameters: { 'input': 'text to echo'} }
+                  {
+                    name: 'calculate-bmi',
+                    title: 'BMI Calculator',
+                    description: 'Calculate Body Mass Index from weight and height',
+                    tool_type: 'static',
+                    parameters: {
+                      weightKg: { type: 'number', description: 'Weight in kilograms', required: true },
+                      heightM: { type: 'number', description: 'Height in meters', required: true }
+                    },
+                    static_result: 'BMI calculation: {weightKg} / ({heightM} * {heightM}) = result'
+                  },
+                  {
+                    name: 'fetch-weather',
+                    title: 'Weather Fetcher',
+                    description: 'Get current weather data for a city',
+                    tool_type: 'api',
+                    parameters: {
+                      city: { type: 'string', description: 'City name (e.g., London, Seattle)', required: true }
+                    },
+                    api_url: 'https://wttr.in/{city}?format=j1',
+                    http_method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                  },
+                  {
+                    name: 'get-crypto-price',
+                    title: 'Crypto Price Fetcher',
+                    description: 'Get current cryptocurrency price',
+                    tool_type: 'api',
+                    parameters: {
+                      symbol: { type: 'string', description: 'Crypto symbol (e.g., bitcoin, ethereum)', required: true },
+                      currency: { type: 'string', description: 'Currency (e.g., usd, eur)', required: true }
+                    },
+                    api_url: 'https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies={currency}',
+                    http_method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                  },
+                  {
+                    name: 'list-files',
+                    title: 'List Project Files',
+                    description: 'Returns a list of project files matching a pattern',
+                    tool_type: 'resource_link',
+                    parameters: {
+                      pattern: { type: 'string', description: 'File pattern to match (e.g., *.ts, README*)', required: true }
+                    },
+                    resource_links_header: 'Found files matching "{pattern}":',
+                    resource_links: [
+                      {
+                        uri: 'file:///project/README.md',
+                        name: 'README.md',
+                        mimeType: 'text/markdown',
+                        description: 'Project documentation'
+                      },
+                      {
+                        uri: 'file:///project/src/index.ts',
+                        name: 'index.ts',
+                        mimeType: 'text/typescript',
+                        description: 'Main application entry point'
+                      },
+                      {
+                        uri: 'file:///project/package.json',
+                        name: 'package.json',
+                        mimeType: 'application/json',
+                        description: 'Package configuration'
+                      }
+                    ]
+                  }
                 ],
                 prompts: [
-                  { name: 'Greeting Prompt', description: 'A friendly greeting.', template: 'Hello, {{name}}!', parameters: { 'name': 'user name' } }
+                  {
+                    name: 'review-code',
+                    title: 'Code Review',
+                    description: 'Review code for best practices and potential issues',
+                    prompt_type: 'basic',
+                    template: 'Please review this code:\n\n{{code}}',
+                    role: 'user',
+                    arguments: {
+                      code: { type: 'string', description: 'The code to review', required: true }
+                    }
+                  },
+                  {
+                    name: 'team-greeting',
+                    title: 'Team Greeting',
+                    description: 'Generate a greeting for team members with context-aware name completion',
+                    prompt_type: 'context_aware',
+                    template: 'Hello {{name}}, welcome to the {{department}} team!',
+                    role: 'assistant',
+                    arguments: {
+                      department: {
+                        type: 'string',
+                        description: 'Department name',
+                        required: true
+                      },
+                      name: {
+                        type: 'string',
+                        description: 'Team member name',
+                        required: true
+                      }
+                    },
+                    completion_config: {
+                      complete: {
+                        department: {
+                          type: 'static',
+                          values: ['engineering', 'sales', 'marketing', 'support']
+                        },
+                        name: {
+                          type: 'conditional',
+                          conditions: [
+                            {
+                              when: { department: 'engineering' },
+                              values: ['Alice', 'Bob', 'Charlie', 'Diana']
+                            },
+                            {
+                              when: { department: 'sales' },
+                              values: ['David', 'Eve', 'Frank', 'Grace']
+                            },
+                            {
+                              when: { department: 'marketing' },
+                              values: ['Henry', 'Iris', 'Jack', 'Kate']
+                            },
+                            {
+                              when: { department: 'support' },
+                              values: ['Liam', 'Mia', 'Noah', 'Olivia']
+                            }
+                          ],
+                          default: ['Guest', 'Visitor']
+                        }
+                      }
+                    }
+                  }
                 ]
               }
             }
@@ -197,8 +705,11 @@ export const openApiSpec = {
                   description: { type: 'string', example: 'An updated description.', nullable: true },
                   version: { type: 'string', example: '1.0.1', nullable: true },
                   is_private: { type: 'boolean', example: false, nullable: true },
+                  visible: { type: 'boolean', example: true, nullable: true, description: 'Whether this project is visible in public listings' },
                   session_management: { type: 'boolean', example: true, nullable: true, description: 'Enable stateful session management' },
                   is_active: { type: 'boolean', example: true, nullable: true },
+                  tags: { type: 'array', items: { type: 'string' }, example: ['AI', 'Automation', 'Updated'], nullable: true, description: 'Tags for categorizing and organizing projects' },
+                  category: { type: 'string', example: 'Machine Learning', nullable: true, description: 'Main category or domain of the project' },
                   resources: { type: 'array', items: { $ref: '#/components/schemas/ProjectSubResource' }, nullable: true },
                   tools: { type: 'array', items: { $ref: '#/components/schemas/ProjectSubTool' }, nullable: true },
                   prompts: { type: 'array', items: { $ref: '#/components/schemas/ProjectSubPrompt' }, nullable: true }
@@ -209,16 +720,124 @@ export const openApiSpec = {
                 description: 'Now with more awesomeness and full sub-item management.',
                 version: '1.1.0',
                 is_private: false,
+                visible: true,
                 is_active: true,
                 session_management: true,
+                tags: ['AI', 'Machine Learning', 'Updated'],
+                category: 'Machine Learning',
                 resources: [
-                  { id: 'existing-resource-uuid', name: 'Main Data Source', uri_pattern: '/data/main.json', api_url: 'https://example.com/api/main', headers: { 'Authorization': 'Bearer mysecretkey' } },
-                  { name: 'New Auxiliary Data', uri_pattern: '/data/aux.json', api_url: 'http://example.com/aux-proxy', headers: { 'X-API-KEY': 'newsecretkey' } }
+                  { 
+                    id: 'existing-resource-uuid', 
+                    name: 'Main Data Source', 
+                    resource_type: 'static',
+                    uri: 'resource://data/main.json', 
+                    title: 'Main Data Configuration',
+                    description: 'Primary data source for the application',
+                    mime_type: 'application/json',
+                    api_url: 'https://jsonplaceholder.typicode.com/posts/1', 
+                    headers: { 'Accept': 'application/json' } 
+                  },
+                  { 
+                    name: 'User Activity Feed', 
+                    resource_type: 'dynamic',
+                    uri: 'activity://posts/user/{userId}',
+                    title: 'User Posts',
+                    description: 'Fetches posts for a specific user',
+                    parameters: {
+                      userId: {
+                        description: 'The user ID (1-10 for JSONPlaceholder)',
+                        type: 'string',
+                        required: true
+                      }
+                    },
+                    api_url: 'https://jsonplaceholder.typicode.com/posts?userId={userId}', 
+                    headers: { 'Accept': 'application/json' } 
+                  }
                 ],
                 tools: [
-                  { id: 'existing-tool-uuid', name: 'Advanced Calculation Tool', description: 'Performs advanced calculations.', http_method: 'POST', api_url: 'https://example.com/api/advanced-calculation', headers: { 'X-Custom-Header': 'SomeValue' } }
+                  { 
+                    id: 'existing-tool-uuid', 
+                    name: 'fetch-github-user', 
+                    title: 'GitHub User Info',
+                    description: 'Fetch GitHub user profile information',
+                    parameters: {
+                      username: { type: 'string', description: 'GitHub username', required: true }
+                    },
+                    api_url: 'https://api.github.com/users/{username}',
+                    http_method: 'GET',
+                    headers: { 
+                      'Accept': 'application/vnd.github.v3+json',
+                      'User-Agent': 'MCP-Server'
+                    }
+                  },
+                  {
+                    name: 'simple-greeting',
+                    title: 'Simple Greeting',
+                    description: 'Generate a personalized greeting',
+                    parameters: {
+                      name: { type: 'string', description: 'Person\'s name', required: true },
+                      timeOfDay: { type: 'string', description: 'Time of day (morning, afternoon, evening)', required: false }
+                    },
+                    static_result: 'Good {timeOfDay}, {name}! Welcome to our MCP server.'
+                  }
                 ],
-                prompts: []
+                prompts: [
+                  {
+                    id: 'existing-prompt-uuid',
+                    name: 'code-explanation',
+                    title: 'Code Explanation',
+                    description: 'Explain what a piece of code does',
+                    prompt_type: 'basic',
+                    template: 'Please explain what this {{language}} code does:\n\n{{code}}',
+                    role: 'user',
+                    arguments: {
+                      language: { type: 'string', description: 'Programming language', required: true },
+                      code: { type: 'string', description: 'Code to explain', required: true }
+                    }
+                  },
+                  {
+                    name: 'team-greeting',
+                    title: 'Team Greeting',
+                    description: 'Generate a greeting for team members with context-aware name completion',
+                    prompt_type: 'context_aware',
+                    template: 'Hello {{name}}, welcome to the {{department}} team!',
+                    role: 'assistant',
+                    arguments: {
+                      department: { type: 'string', description: 'Department name', required: true },
+                      name: { type: 'string', description: 'Team member name', required: true }
+                    },
+                    completion_config: {
+                      complete: {
+                        department: {
+                          type: 'static',
+                          values: ['engineering', 'sales', 'marketing', 'support']
+                        },
+                        name: {
+                          type: 'conditional',
+                          conditions: [
+                            {
+                              when: { department: 'engineering' },
+                              values: ['Alice', 'Bob', 'Charlie', 'Diana']
+                            },
+                            {
+                              when: { department: 'sales' },
+                              values: ['David', 'Eve', 'Frank', 'Grace']
+                            },
+                            {
+                              when: { department: 'marketing' },
+                              values: ['Henry', 'Iris', 'Jack', 'Kate']
+                            },
+                            {
+                              when: { department: 'support' },
+                              values: ['Liam', 'Maya', 'Noah', 'Olivia']
+                            }
+                          ],
+                          default: ['Guest', 'Visitor']
+                        }
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -246,6 +865,81 @@ export const openApiSpec = {
           '200': { description: 'Project deleted' },
           '404': { description: 'Not found' },
           '401': { description: 'Unauthorized' }
+        }
+      }
+    },
+    '/public/mcp-projects': {
+      get: {
+        summary: 'Get all visible MCP projects (public endpoint)',
+        description: 'Returns all MCP projects that have visible=true. This is a public endpoint that does not require authentication.',
+        security: [], // Override global security to make this endpoint public
+        responses: {
+          '200': {
+            description: 'A list of visible MCP projects',
+            content: {
+              'application/json': {
+                schema: { 
+                  type: 'array', 
+                  items: { 
+                    type: 'object',
+                    description: 'MCP Project (public view - basic information only)',
+                    properties: {
+                      name: { type: 'string' },
+                      description: { type: 'string', nullable: true },
+                      version: { type: 'string', nullable: true },
+                      tags: { type: 'array', items: { type: 'string' }, nullable: true, description: 'Tags for categorizing and organizing projects' },
+                      category: { type: 'string', nullable: true, description: 'Main category or domain of the project' },
+                      endpoint: { type: 'string', format: 'url' },
+                      created_at: { type: 'string', format: 'date-time' }
+                    },
+                    required: ['name', 'endpoint', 'created_at']
+                  }
+                },
+                example: [
+                  {
+                    name: 'My Awesome Project',
+                    description: 'A truly awesome project.',
+                    version: '1.0.1',
+                    tags: ['AI', 'Automation', 'API'],
+                    category: 'Development',
+                    endpoint: 'http://localhost:3000/mcp/my-awesome-project-00000000',
+                    created_at: '2025-06-28T06:55:11.100Z'
+                  },
+                  {
+                    name: 'Weather Service API',
+                    description: 'Get weather information for any city',
+                    version: '2.0.0',
+                    tags: ['Weather', 'API', 'Data'],
+                    category: 'Utilities',
+                    endpoint: 'https://api.mcpdploy.com/mcp/weather-service-550e8400',
+                    created_at: '2025-06-15T10:30:00Z'
+                  },
+                  {
+                    name: 'File Manager Tool',
+                    description: null,
+                    version: null,
+                    tags: null,
+                    category: null,
+                    endpoint: 'https://api.mcpdploy.com/mcp/file-manager-990e8400',
+                    created_at: '2025-06-20T14:15:00Z'
+                  }
+                ]
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error' }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

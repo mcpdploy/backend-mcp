@@ -146,8 +146,11 @@ managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCr
     // --- END USAGE TRACKING & LIMITING ---
 
     const isPrivate = (projectData as any).is_private ?? false;
+    const visible = (projectData as any).visible ?? false;
+    const tags = (projectData as any).tags || null;
+    const category = (projectData as any).category || null;
     const projectId = crypto.randomUUID();
-    const apiKey = isPrivate ? crypto.randomUUID() : '';
+    const apiKey = isPrivate ? crypto.randomUUID() : null;
     const slug = projectData.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     
     const frontendUrl = process.env.MCP_FRONTEND_BASE_URL || 'https://mcpdploy.com'; // fallback
@@ -164,6 +167,9 @@ managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCr
         version: projectData.version,
         user_id: userId,
         is_private: isPrivate,
+        visible: visible,
+        tags: tags,
+        category: category,
         api_key: apiKey,
         endpoint,
         session_management: sessionManagement,
@@ -244,14 +250,17 @@ managementRoutes.put('/mcp-projects/:id', validator('json', (value) => mcpProjec
   const supabasePrivileged = getPrivilegedSupabaseClient(c);
 
   try {
-    const { name, description, version, is_private, is_active, resources, tools, prompts } = projectUpdateData;
+    const { name, description, version, is_private, visible, is_active, tags, category, resources, tools, prompts } = projectUpdateData;
     const mainProjectDataToUpdate: any = {};
     if (name !== undefined) mainProjectDataToUpdate.name = name;
     if (description !== undefined) mainProjectDataToUpdate.description = description;
     if (version !== undefined) mainProjectDataToUpdate.version = version;
     if (is_private !== undefined) mainProjectDataToUpdate.is_private = is_private;
+    if (visible !== undefined) mainProjectDataToUpdate.visible = visible;
     if (projectUpdateData.session_management !== undefined) mainProjectDataToUpdate.session_management = projectUpdateData.session_management;
-    if (is_active !== undefined) mainProjectDataToUpdate.is_active = is_active; 
+    if (is_active !== undefined) mainProjectDataToUpdate.is_active = is_active;
+    if (tags !== undefined) mainProjectDataToUpdate.tags = tags;
+    if (category !== undefined) mainProjectDataToUpdate.category = category; 
 
     if (Object.keys(mainProjectDataToUpdate).length > 0) {
       const { error: mainUpdateError } = await supabasePrivileged
@@ -594,6 +603,37 @@ managementRoutes.post('/subscription/resume', async (c) => {
   }
 
   return c.json({ message: 'Subscription will continue and will not be canceled at period end.' });
+});
+
+// Public endpoint to get all visible projects (no authentication required)
+managementRoutes.get('/public/mcp-projects', async (c) => {
+  try {
+    // Query all projects where visible=true and is_active=true
+    // Return only basic project information
+    const { data, error } = await supabase
+      .from("mcp_servers")
+      .select(`
+        name,
+        description,
+        version,
+        tags,
+        category,
+        endpoint,
+        created_at
+      `)
+      .eq("visible", true)
+      .eq("is_active", true);
+
+    if (error) {
+      console.error("[GET /public/mcp-projects] Supabase error:", error);
+      return c.json({ error: "Failed to fetch visible projects" }, 500);
+    }
+
+    return c.json(data || []);
+  } catch (err: any) {
+    console.error("[GET /public/mcp-projects] Handler error:", err);
+    return c.json({ error: err.message || String(err) }, 500);
+  }
 });
 
 // == MCP API REQUESTS ==

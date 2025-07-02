@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { supabaseAuthMiddleware } from './middleware/auth'; // Import the middleware
-import { authRoutes } from './routes/auth'; // Import the auth routes
-import { openapiRoutes } from './routes/openapi'; // Import the openapi routes
-import { managementRoutes } from './routes/management'; // Import management routes
-import { mcpDynamicHandler } from './mcp/handler'; // Import the new MCP dynamic handler
+import { supabaseAuthMiddleware } from './middleware/auth';
+import { authRoutes } from './routes/auth';
+import { openapiRoutes } from './routes/openapi';
+import { managementRoutes } from './routes/management';
+import { mcpDynamicHandler } from './mcp/handler';
 import { supportRoutes } from './routes/support';
 
 // Define environment bindings for Cloudflare Workers
@@ -29,9 +29,10 @@ app.use('*', cors({
     'Origin',
     'X-Requested-With',
     'Access-Control-Request-Method',
-    'Access-Control-Request-Headers'
+    'Access-Control-Request-Headers',
+    'mcp-session-id'
   ],
-  exposeHeaders: ['Content-Length', 'X-Kuma-Revision'],
+  exposeHeaders: ['Content-Length', 'X-Kuma-Revision','mcp-session-id'],
   maxAge: 86400, // 24 hours
   credentials: true,
 }));
@@ -50,14 +51,9 @@ app.options('*', (c) => {
   });
 });
 
-// --- Auth Middleware Configuration ---
-// Middleware to verify Supabase token and add userId to context
-// REMOVED old supabaseAuthMiddleware definition
-
-// Apply auth middleware to /mcp-projects and all its subroutes
+// Apply auth middleware to protected routes
 app.use('/mcp-projects', supabaseAuthMiddleware);
 app.use('/mcp-projects/*', supabaseAuthMiddleware);
-// Only apply auth middleware to /subscription/plan and /stripe/create-checkout-session
 app.use('/subscription/plan', supabaseAuthMiddleware);
 app.use('/subscription/cancel', supabaseAuthMiddleware);
 app.use('/subscription/resume', supabaseAuthMiddleware);
@@ -65,48 +61,17 @@ app.use('/stripe/create-checkout-session', supabaseAuthMiddleware);
 app.use('/auth/change-password', supabaseAuthMiddleware);
 app.use('/support/tickets', supabaseAuthMiddleware);
 
-// --- Helper: Generate HTML Info Page ---
-// REMOVE generateInfoPage function
-
-// --- Helper: Get User ID from context ---
-// async function getUserIdFromContext(c: any): Promise<string | null> {
-//   return c.var.userId;
-// }
-
-// --- Management API Endpoints ---
-
-// == MCP Projects ==
-// REMOVE Management API Endpoints (POST, GET, PUT, DELETE for /mcp-projects and /mcp-projects/:id)
-// REMOVE Helper: getPrivilegedSupabaseClient (if not used by mcpDynamicHandler, which it isn't currently)
-
-// --- Dynamic MCP Server Handler ---
-// Route pattern: /mcp/someName-projectUUID/optional/sub/path
-// The mcpDynamicHandler function and its helpers (like generateInfoPage)
-// have been moved to src/mcp/handler.ts. The old code below should be deleted.
-
-/* DELETE THE FOLLOWING ENTIRE FUNCTION BLOCK FOR generateInfoPage */
-/* function generateInfoPage(...) { ... } */
-
-/* DELETE THE FOLLOWING ENTIRE ASYNC FUNCTION BLOCK FOR mcpDynamicHandler */
-/* const mcpDynamicHandler = async (c: any) => { ... }; */
-
 // Dynamic MCP server routes (match any identifier)
-app.all('/mcp/:mcpIdentifier/*', mcpDynamicHandler); // Uses imported handler
-app.all('/mcp/:mcpIdentifier', mcpDynamicHandler);  // Uses imported handler
+app.all('/mcp/:mcpIdentifier/*', mcpDynamicHandler);
+app.all('/mcp/:mcpIdentifier', mcpDynamicHandler);
+
 // Fallback for /mcp if no identifier matches
 app.all('/mcp', (c) => c.json({ error: 'MCP Project identifier missing or invalid. Format: /mcp/name-uuid' }, 400));
 app.all('/mcp/', (c) => c.json({ error: 'MCP Project identifier missing or invalid. Format: /mcp/name-uuid' }, 400));
 
-// --- Swagger/OpenAPI Spec ---
-// REMOVED old openapi/swagger handlers
-
-// Mount the openapi routes
+// Mount routes
 app.route('/', openapiRoutes);
-
-// Mount the auth routes
 app.route('/', authRoutes);
-
-// Mount management routes
 app.route('/', managementRoutes);
 app.route('/', supportRoutes);
 
