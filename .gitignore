@@ -173,3 +173,6 @@ dist
 
 # wrangler configuration file
 wrangler.toml
+
+# wrangler generated types (may contain secrets)
+worker-configuration.d.ts
