@@ -9,6 +9,36 @@ export const openApiSpec = {
     { url: 'http://localhost:3000/', description: 'Local development' },
     { url: 'https://api.mcpdploy.com/', description: 'Production' },
   ],
+  tags: [
+    {
+      name: 'Authentication',
+      description: 'User authentication and account management endpoints'
+    },
+    {
+      name: 'Projects',
+      description: 'MCP project management and configuration endpoints'
+    },
+    {
+      name: 'Analytics',
+      description: 'Usage analytics and reporting endpoints'
+    },
+    {
+      name: 'Subscriptions',
+      description: 'User subscription and plan management endpoints'
+    },
+    {
+      name: 'Payments',
+      description: 'Stripe payment processing endpoints'
+    },
+    {
+      name: 'Support',
+      description: 'Customer support and ticket management endpoints'
+    },
+    {
+      name: 'Public',
+      description: 'Public endpoints that do not require authentication'
+    }
+  ],
   components: {
     securitySchemes: {
       bearerAuth: {
@@ -377,6 +407,7 @@ export const openApiSpec = {
   paths: {
     '/mcp-projects': {
       get: {
+        tags: ['Projects'],
         summary: 'List all MCP projects for the authenticated user',
         responses: {
           '200': {
@@ -391,6 +422,7 @@ export const openApiSpec = {
         }
       },
       post: {
+        tags: ['Projects'],
         summary: 'Create a new MCP project',
         requestBody: {
           required: true,
@@ -672,6 +704,7 @@ export const openApiSpec = {
     },
     '/mcp-projects/{id}': {
       get: {
+        tags: ['Projects'],
         summary: 'Get a specific MCP project',
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } }
@@ -690,6 +723,7 @@ export const openApiSpec = {
         }
       },
       put: {
+        tags: ['Projects'],
         summary: 'Update an MCP project',
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } }
@@ -857,6 +891,7 @@ export const openApiSpec = {
         }
       },
       delete: {
+        tags: ['Projects'],
         summary: 'Delete an MCP project',
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } }
@@ -870,6 +905,7 @@ export const openApiSpec = {
     },
     '/public/mcp-projects': {
       get: {
+        tags: ['Public'],
         summary: 'Get all visible MCP projects (public endpoint)',
         description: 'Returns all MCP projects that have visible=true. This is a public endpoint that does not require authentication.',
         security: [], // Override global security to make this endpoint public
@@ -945,6 +981,7 @@ export const openApiSpec = {
     },
     '/auth/login': {
       post: {
+        tags: ['Authentication'],
         summary: 'Login with email and password (Supabase)',
         description: 'Returns a JWT access token on success. Use this token as a Bearer token for authenticated requests.',
         requestBody: {
@@ -997,6 +1034,7 @@ export const openApiSpec = {
     },
     '/auth/signup': {
       post: {
+        tags: ['Authentication'],
         summary: 'Sign up with email and password (Supabase)',
         description: 'Creates a new user and returns a JWT access token on success.',
         requestBody: {
@@ -1071,6 +1109,7 @@ export const openApiSpec = {
     },
     '/auth/refresh': {
       post: {
+        tags: ['Authentication'],
         summary: 'Refresh access token using refresh token',
         description: 'Uses a refresh token to obtain a new access token. Returns a new JWT access token and refresh token on success.',
         requestBody: {
@@ -1150,6 +1189,7 @@ export const openApiSpec = {
     },
     '/stripe/create-checkout-session': {
       post: {
+        tags: ['Payments'],
         summary: 'Create Stripe Checkout Session',
         description: 'Creates a Stripe Checkout session for a given plan and returns the session URL.',
         requestBody: {
@@ -1189,6 +1229,7 @@ export const openApiSpec = {
     },
     '/stripe/webhook': {
       post: {
+        tags: ['Payments'],
         summary: 'Stripe Webhook',
         description: 'Handles Stripe webhook events for subscription management.',
         requestBody: {
@@ -1207,6 +1248,7 @@ export const openApiSpec = {
     },
     '/subscription/plan': {
       get: {
+        tags: ['Subscriptions'],
         summary: 'Get Current User Subscription Plan',
         description: 'Returns the current user\'s subscription plan and usage.',
         responses: {
@@ -1265,6 +1307,7 @@ export const openApiSpec = {
     },
     '/subscription/plans': {
       get: {
+        tags: ['Subscriptions'],
         summary: 'Get All Subscription Plans',
         description: 'Returns all available subscription plans.',
         responses: {
@@ -1282,6 +1325,7 @@ export const openApiSpec = {
     },
     '/subscription/cancel': {
       post: {
+        tags: ['Subscriptions'],
         summary: 'Cancel Current User Subscription',
         description: 'Cancels the authenticated user\'s active subscription. Requires authentication.',
         responses: {
@@ -1307,6 +1351,7 @@ export const openApiSpec = {
     },
     '/subscription/resume': {
       post: {
+        tags: ['Subscriptions'],
         summary: 'Resume (Uncancel) Current User Subscription',
         description: 'Resumes (uncancels) the authenticated user\'s subscription if it was set to cancel at period end. Requires authentication.',
         responses: {
@@ -1332,6 +1377,7 @@ export const openApiSpec = {
     },
     '/auth/resend-confirmation': {
       post: {
+        tags: ['Authentication'],
         summary: 'Resend Email Confirmation',
         description: `Resends the email confirmation link to the specified email address. Useful when the initial confirmation email was not received or expired.\n\nThe confirmation email will redirect to /auth/verify after the user clicks the link. If you need to customize the redirect, update the backend implementation.`,
         requestBody: {
@@ -1421,6 +1467,7 @@ export const openApiSpec = {
     },
     '/auth/change-password': {
       post: {
+        tags: ['Authentication'],
         summary: 'Change Password',
         description: 'Changes the password for the authenticated user. Requires the current password for verification.',
         requestBody: {
@@ -1514,6 +1561,7 @@ export const openApiSpec = {
     },
     '/auth/forgot-password': {
       post: {
+        tags: ['Authentication'],
         summary: 'Request Password Reset',
         description: 'Sends a password reset email to the specified email address. For security reasons, always returns success even if the email doesn\'t exist.',
         requestBody: {
@@ -1593,6 +1641,7 @@ export const openApiSpec = {
     },
     '/auth/reset-password': {
       post: {
+        tags: ['Authentication'],
         summary: 'Reset Password with Token',
         description: 'Resets the user\'s password using the access token received from the password reset email link.',
         requestBody: {
@@ -1685,6 +1734,7 @@ export const openApiSpec = {
     },
     '/support/contact': {
       post: {
+        tags: ['Support'],
         summary: 'Submit Support Request',
         description: 'Submit a support request. Can be used by both authenticated and anonymous users.',
         requestBody: {
@@ -1778,6 +1828,7 @@ export const openApiSpec = {
     },
     '/support/tickets': {
       get: {
+        tags: ['Support'],
         summary: 'Get User Support Tickets',
         description: 'Retrieve all support tickets for the authenticated user.',
         responses: {
@@ -1838,6 +1889,7 @@ export const openApiSpec = {
     },
     '/auth/verify-token': {
       post: {
+        tags: ['Authentication'],
         summary: 'Verify Email Confirmation',
         description: 'Verifies the user\'s email using the access token received from the confirmation email link. Returns the user object and token info if successful and the email is confirmed.',
         requestBody: {
@@ -1931,6 +1983,893 @@ export const openApiSpec = {
             }
           }
         }
+      }
+    },
+    '/auth/google': {
+      post: {
+        tags: ['Authentication'],
+        summary: 'Initiate Google OAuth Login',
+        description: 'Returns a URL to redirect the user to Google for OAuth authentication. After authentication, Google will redirect back to your specified callback URL.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  redirectTo: {
+                    type: 'string',
+                    format: 'url',
+                    description: 'URL to redirect to after successful authentication',
+                    example: 'https://mcpdploy.com/auth/callback'
+                  }
+                }
+              },
+              example: {
+                redirectTo: 'https://mcpdploy.com/auth/callback'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'OAuth URL generated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    url: { 
+                      type: 'string', 
+                      format: 'url',
+                      description: 'Google OAuth URL to redirect the user to',
+                      example: 'https://accounts.google.com/o/oauth2/v2/auth?...'
+                    },
+                    provider: {
+                      type: 'string',
+                      example: 'google'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Failed to initiate OAuth',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Failed to initiate Google login.' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/auth/providers': {
+      get: {
+        tags: ['Authentication'],
+        summary: 'Get Available OAuth Providers',
+        description: 'Returns a list of available OAuth providers that can be used for authentication.',
+        responses: {
+          '200': {
+            description: 'List of providers',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    providers: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          name: { type: 'string', example: 'google' },
+                          displayName: { type: 'string', example: 'Google' },
+                          icon: { type: 'string', format: 'url', example: 'https://www.google.com/favicon.ico' },
+                          enabled: { type: 'boolean', example: true }
+                        }
+                      }
+                    }
+                  }
+                },
+                example: {
+                  providers: [
+                    {
+                      name: 'google',
+                      displayName: 'Google',
+                      icon: 'https://www.google.com/favicon.ico',
+                      enabled: true
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/auth/oauth-callback': {
+      post: {
+        tags: ['Authentication'],
+        summary: 'OAuth Callback Handler',
+        description: 'Handles the OAuth callback after the user has authenticated with the provider. Verifies the session and returns user details.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  access_token: { type: 'string', description: 'Access token from OAuth provider' },
+                  refresh_token: { type: 'string', description: 'Refresh token from OAuth provider' },
+                  provider_token: { type: 'string', description: 'Provider-specific access token', nullable: true },
+                  provider_refresh_token: { type: 'string', description: 'Provider-specific refresh token', nullable: true }
+                },
+                required: ['access_token']
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'OAuth callback processed successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    user: { type: 'object', description: 'User details' },
+                    access_token: { type: 'string' },
+                    refresh_token: { type: 'string' },
+                    provider_token: { type: 'string', nullable: true },
+                    provider_refresh_token: { type: 'string', nullable: true },
+                    isNewUser: { type: 'boolean', description: 'Whether this is a new user' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Invalid OAuth session',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Invalid OAuth session.' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error.' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/auth/deactivate': {
+      post: {
+        tags: ['Authentication'],
+        summary: 'Deactivate User Account',
+        description: 'Deactivates the user account with a 30-day grace period before permanent deletion. The user will be logged out and all sessions will be revoked.',
+        responses: {
+          '200': {
+            description: 'Account deactivated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string', 
+                      example: 'Account deactivated successfully. You have 30 days to reactivate your account before permanent deletion.'
+                    },
+                    deactivated_at: { 
+                      type: 'string', 
+                      format: 'date-time',
+                      example: '2024-01-15T10:30:00Z' 
+                    },
+                    scheduled_deletion_at: { 
+                      type: 'string', 
+                      format: 'date-time',
+                      example: '2024-02-14T10:30:00Z' 
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - invalid or missing token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Authorization header required' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error during account deactivation' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/auth/reactivate': {
+      post: {
+        tags: ['Authentication'],
+        summary: 'Reactivate User Account',
+        description: 'Reactivates a deactivated user account within the 30-day grace period. Requires valid email and password for authentication.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  email: { 
+                    type: 'string', 
+                    format: 'email',
+                    description: 'User email address',
+                    example: 'user@example.com'
+                  },
+                  password: { 
+                    type: 'string', 
+                    description: 'User password',
+                    example: 'MyP@ssw0rd!'
+                  }
+                },
+                required: ['email', 'password']
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Account reactivated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string', 
+                      example: 'Account reactivated successfully. You can now login normally.'
+                    },
+                    reactivated_at: { 
+                      type: 'string', 
+                      format: 'date-time',
+                      example: '2024-01-20T14:30:00Z' 
+                    },
+                    access_token: { type: 'string', description: 'JWT access token' },
+                    refresh_token: { type: 'string', description: 'JWT refresh token' },
+                    user: { type: 'object', description: 'User details' }
+                  }
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Invalid request - missing credentials or account not deactivated',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Account is not deactivated' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Invalid credentials',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Invalid credentials' }
+                  }
+                }
+              }
+            }
+          },
+          '410': { 
+            description: 'Account is past the 30-day reactivation period',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Account is past the 30-day reactivation period and scheduled for deletion' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error during account reactivation' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/auth/cleanup-deactivated-accounts': {
+      post: {
+        tags: ['Authentication'],
+        summary: 'Cleanup Deactivated Accounts (Admin)',
+        description: 'Administrative endpoint to permanently delete accounts that have been deactivated for more than 30 days. This endpoint should be called by a scheduled job/cron. Requires admin API key.',
+        parameters: [
+          {
+            name: 'X-Admin-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string' },
+            description: 'Admin API key for authentication'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Cleanup completed successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { type: 'string', example: 'Account cleanup completed' },
+                    processed: { type: 'integer', example: 5, description: 'Number of accounts processed' },
+                    successful: { type: 'integer', example: 4, description: 'Number of accounts successfully deleted' },
+                    failed: { type: 'integer', example: 1, description: 'Number of accounts that failed to delete' },
+                    errors: { 
+                      type: 'array', 
+                      items: {
+                        type: 'object',
+                        properties: {
+                          userId: { type: 'string', format: 'uuid' },
+                          error: { type: 'string' },
+                          step: { type: 'string', enum: ['auth_deletion', 'unexpected_error'] }
+                        }
+                      },
+                      description: 'Details of any deletion failures'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - invalid or missing admin key',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Unauthorized' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error during cleanup' }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/auth/account-status': {
+      get: {
+        tags: ['Authentication'],
+        summary: 'Get Account Status',
+        description: 'Returns the current status of the authenticated user\'s account, including deactivation information if applicable.',
+        responses: {
+          '200': {
+            description: 'Account status retrieved successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    user_id: { type: 'string', format: 'uuid' },
+                    email: { type: 'string', format: 'email' },
+                    account_status: { 
+                      type: 'string', 
+                      enum: ['active', 'deactivated'],
+                      example: 'active'
+                    },
+                    created_at: { type: 'string', format: 'date-time' },
+                    deactivated_at: { 
+                      type: 'string', 
+                      format: 'date-time',
+                      nullable: true,
+                      description: 'Present only if account is deactivated'
+                    },
+                    scheduled_deletion_at: { 
+                      type: 'string', 
+                      format: 'date-time',
+                      nullable: true,
+                      description: 'Present only if account is deactivated'
+                    },
+                    days_until_deletion: { 
+                      type: 'integer',
+                      nullable: true,
+                      description: 'Present only if account is deactivated'
+                    },
+                    can_reactivate: { 
+                      type: 'boolean',
+                      nullable: true,
+                      description: 'Present only if account is deactivated'
+                    }
+                  }
+                },
+                examples: {
+                  active_account: {
+                    summary: 'Active account',
+                    value: {
+                      user_id: '123e4567-e89b-12d3-a456-426614174000',
+                      email: 'user@example.com',
+                      account_status: 'active',
+                      created_at: '2024-01-01T00:00:00Z'
+                    }
+                  },
+                  deactivated_account: {
+                    summary: 'Deactivated account',
+                    value: {
+                      user_id: '123e4567-e89b-12d3-a456-426614174000',
+                      email: 'user@example.com',
+                      account_status: 'deactivated',
+                      created_at: '2024-01-01T00:00:00Z',
+                      deactivated_at: '2024-01-15T10:30:00Z',
+                      scheduled_deletion_at: '2024-02-14T10:30:00Z',
+                      days_until_deletion: 20,
+                      can_reactivate: true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - invalid or missing token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Authorization header required' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Internal server error' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/analytics/summary': {
+      get: {
+        tags: ['Analytics'],
+        summary: 'Get Analytics Summary',
+        description: 'Returns a comprehensive analytics summary for the authenticated user including usage stats, errors, and top endpoints.',
+        responses: {
+          '200': {
+            description: 'Analytics summary',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    summary: { type: 'object', description: 'User analytics summary from view' },
+                    today_stats: { type: 'object', nullable: true, description: 'Today\'s detailed statistics' },
+                    month_stats: { type: 'object', nullable: true, description: 'This month\'s aggregated statistics' },
+                    recent_errors: { 
+                      type: 'array', 
+                      items: { type: 'object' },
+                      description: 'Recent error entries'
+                    },
+                    top_endpoints: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          endpoint: { type: 'string' },
+                          count: { type: 'integer' }
+                        }
+                      },
+                      description: 'Most frequently accessed endpoints'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/analytics/daily': {
+      get: {
+        tags: ['Analytics'],
+        summary: 'Get Daily Analytics',
+        description: 'Returns daily analytics data for a specified date range.',
+        parameters: [
+          {
+            name: 'start_date',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'date' },
+            description: 'Start date (YYYY-MM-DD)'
+          },
+          {
+            name: 'end_date',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'date' },
+            description: 'End date (YYYY-MM-DD)'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Daily analytics data',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'array',
+                  items: { type: 'object' }
+                }
+              }
+            }
+          },
+          '400': { description: 'Invalid parameters' },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/analytics/monthly': {
+      get: {
+        tags: ['Analytics'],
+        summary: 'Get Monthly Analytics',
+        description: 'Returns monthly analytics data.',
+        parameters: [
+          {
+            name: 'year',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer' },
+            description: 'Filter by year'
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', default: 12 },
+            description: 'Number of months to return'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Monthly analytics data',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'array',
+                  items: { type: 'object' }
+                }
+              }
+            }
+          },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/analytics/logs': {
+      get: {
+        tags: ['Analytics'],
+        summary: 'Get Detailed Analytics Logs',
+        description: 'Returns paginated detailed analytics logs with filtering options.',
+        parameters: [
+          {
+            name: 'page',
+            in: 'query',
+            schema: { type: 'integer', default: 1 },
+            description: 'Page number'
+          },
+          {
+            name: 'page_size',
+            in: 'query',
+            schema: { type: 'integer', default: 50 },
+            description: 'Number of items per page'
+          },
+          {
+            name: 'start_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date-time' },
+            description: 'Filter by start date'
+          },
+          {
+            name: 'end_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date-time' },
+            description: 'Filter by end date'
+          },
+          {
+            name: 'status_code',
+            in: 'query',
+            schema: { type: 'integer' },
+            description: 'Filter by HTTP status code'
+          },
+          {
+            name: 'method',
+            in: 'query',
+            schema: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] },
+            description: 'Filter by HTTP method'
+          },
+          {
+            name: 'endpoint',
+            in: 'query',
+            schema: { type: 'string' },
+            description: 'Filter by endpoint (partial match)'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Analytics logs with pagination',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    data: { type: 'array', items: { type: 'object' } },
+                    pagination: {
+                      type: 'object',
+                      properties: {
+                        page: { type: 'integer' },
+                        page_size: { type: 'integer' },
+                        total: { type: 'integer' },
+                        total_pages: { type: 'integer' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/analytics/projects': {
+      get: {
+        tags: ['Analytics'],
+        summary: 'Get Analytics by Project',
+        description: 'Returns analytics data aggregated by project.',
+        parameters: [
+          {
+            name: 'start_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date-time' },
+            description: 'Filter by start date'
+          },
+          {
+            name: 'end_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date-time' },
+            description: 'Filter by end date'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Project analytics data',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      project_id: { type: 'string', format: 'uuid' },
+                      name: { type: 'string' },
+                      count: { type: 'integer' }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/analytics/performance': {
+      get: {
+        tags: ['Analytics'],
+        summary: 'Get Performance Metrics',
+        description: 'Returns performance metrics including response time percentiles.',
+        parameters: [
+          {
+            name: 'period',
+            in: 'query',
+            schema: { type: 'string', enum: ['day', 'week', 'month'], default: 'day' },
+            description: 'Time period for metrics'
+          },
+          {
+            name: 'project_id',
+            in: 'query',
+            schema: { type: 'string', format: 'uuid' },
+            description: 'Filter by specific project'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Performance metrics',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    avg_response_time: { type: 'integer', description: 'Average response time in ms' },
+                    p50_response_time: { type: 'integer', description: '50th percentile response time' },
+                    p95_response_time: { type: 'integer', description: '95th percentile response time' },
+                    p99_response_time: { type: 'integer', description: '99th percentile response time' },
+                    min_response_time: { type: 'integer', description: 'Minimum response time' },
+                    max_response_time: { type: 'integer', description: 'Maximum response time' },
+                    total_requests: { type: 'integer', description: 'Total number of requests' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/analytics/export': {
+      get: {
+        tags: ['Analytics'],
+        summary: 'Export Analytics Data',
+        description: 'Export analytics data in JSON or CSV format.',
+        parameters: [
+          {
+            name: 'format',
+            in: 'query',
+            schema: { type: 'string', enum: ['json', 'csv'], default: 'json' },
+            description: 'Export format'
+          },
+          {
+            name: 'start_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date-time' },
+            description: 'Filter by start date'
+          },
+          {
+            name: 'end_date',
+            in: 'query',
+            schema: { type: 'string', format: 'date-time' },
+            description: 'Filter by end date'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Exported data',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'array',
+                  items: { type: 'object' }
+                }
+              },
+              'text/csv': {
+                schema: {
+                  type: 'string',
+                  description: 'CSV formatted data'
+                }
+              }
+            }
+          },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
       }
     }
   }

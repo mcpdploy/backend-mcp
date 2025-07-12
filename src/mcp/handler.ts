@@ -141,6 +141,25 @@ const serverCache = new Map<string, { mcpServer: any, lastUpdated: number }>();
 // Cache timeout (5 minutes)
 const CACHE_TIMEOUT = 5 * 60 * 1000;
 
+// Request deduplication for rapid-fire requests
+const recentRequests = new Map<string, number>();
+const DEDUP_WINDOW_MS = 1000; // 1 second window for deduplication
+
+// Connection session tracking - count initial handshake as single request
+const connectionSessions = new Map<string, { startTime: number, requestCount: number }>();
+const SESSION_WINDOW_MS = 5000; // 5 second window for initial connection
+const MAX_FREE_REQUESTS = 3; // First 3 requests in session window count as 1
+
+// Non-billable MCP protocol methods
+const NON_BILLABLE_METHODS = [
+  'initialize',
+  'notifications/initialized', 
+  'resources/list',
+  'tools/list',
+  'prompts/list',
+  'completion/complete'
+];
+
 // Helper function to clean up expired cache entries
 function cleanupExpiredCacheEntries(): void {
   const now = Date.now();
@@ -224,6 +243,14 @@ function generateInfoPage(
 }
 
 // Dynamic MCP Server Handler (Copied and adapted from index.ts)
+// 
+// MCP Protocol typical connection flow:
+// 1. Client sends "initialize" request
+// 2. Server responds with capabilities
+// 3. Client may send "resources/list", "tools/list", "prompts/list" to discover features
+// 4. Client sends actual tool/resource/prompt calls as needed
+// 
+// With deduplication, rapid connection requests (within 1 second) only count as 1 API call
 export const mcpDynamicHandler = async (c: any) => { // c should be typed with Hono Context, e.g., Context<Env>
   console.log(`[mcpDynamicHandler] ENTERED. Path: ${c.req.path}, Method: ${c.req.method}`);
 
@@ -284,8 +311,42 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
     return c.json({ error: "MCP project is not active." }, 503);
   }
   
+  // --- EARLY RETURNS FOR NON-BILLABLE REQUESTS ---
+  // Skip usage tracking for OPTIONS (preflight)
+  if (c.req.method === 'OPTIONS') {
+    console.log(`[mcpDynamicHandler] Skipping usage tracking for OPTIONS request`);
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, mcp-session-id',
+        'Access-Control-Max-Age': '86400'
+      }
+    });
+  }
+  
+  // Skip usage tracking for HTML info page requests
+  const mcpBasePath = `/mcp/${mcpIdentifier}`;
+  if (c.req.method === 'GET' && (path === mcpBasePath || path === `${mcpBasePath}/`) && (c.req.header("accept") || "").includes("text/html")) {
+    console.log(`[mcpDynamicHandler] Serving HTML info page - skipping usage tracking`);
+    const baseUrl = process.env.MCP_FRONTEND_BASE_URL || 'https://mcpdploy.com';
+    const htmlContent = generateInfoPage(mcpIdentifier, project, project.mcp_resources || [], project.mcp_tools || [], project.mcp_prompts || [], baseUrl);
+    return c.html(htmlContent);
+  }
+  
+  // Reject non-POST requests for actual MCP protocol
+  if (c.req.method !== 'POST') {
+    console.log(`[mcpDynamicHandler] Received ${c.req.method} request for MCP endpoint. Returning 405 Method Not Allowed.`);
+    return c.json(
+      { jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed. MCP expects POST for RPC calls." }, id: null }, 
+      405
+    );
+  }
+  
   // --- USAGE TRACKING & LIMITING (per project owner) ---
   console.log(`[mcpDynamicHandler] ==================== USAGE TRACKING ====================`);
+  let usageTracked = false; // Track whether we actually incremented usage for this request
   const projectOwnerId = project.user_id;
   if (!projectOwnerId) {
     console.error(`[mcpDynamicHandler] Project ${project.id} has no user_id (owner). Cannot track usage.`);
@@ -296,29 +357,81 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
   console.log(`[mcpDynamicHandler] Request: ${c.req.method} ${c.req.path}`);
   console.log(`[mcpDynamicHandler] User-Agent: ${c.req.header('user-agent') || 'Not provided'}`);
   
-  // Daily limit
-  console.log(`[mcpDynamicHandler] Checking daily usage limit...`);
-  const { allowed: allowedDay, error: errorDay, status: statusDay, usage: dailyUsage, plan: dailyPlan } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_today' });
-  console.log(`[mcpDynamicHandler] Daily usage check result: allowed=${allowedDay}, error="${errorDay}"`);
-  if (dailyUsage && dailyPlan) {
-    console.log(`[mcpDynamicHandler] 📊 DAILY USAGE: ${dailyUsage.requests_today || 0}/${dailyPlan.max_requests_per_day || 'unlimited'} requests (${dailyUsage.requests_today_date})`);
-  }
-  if (!allowedDay) {
-    console.warn(`[mcpDynamicHandler] Daily quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorDay}`);
-    return c.json({ error: errorDay }, statusDay ?? 429);
+  // Enhanced session-based tracking for connection handshake
+  // Include user agent to differentiate between different client instances
+  const userAgent = c.req.header('user-agent') || 'unknown';
+  const clientFingerprint = userAgent.slice(0, 20).replace(/[^a-zA-Z0-9]/g, '_');
+  const sessionKey = `${projectOwnerId}-${projectId}-${clientFingerprint}`;
+  const now = Date.now();
+  
+  // Clean up old sessions periodically
+  if (connectionSessions.size > 100) {
+    const cutoffTime = now - SESSION_WINDOW_MS * 2; // Clean up sessions older than 2x window
+    for (const [key, sess] of connectionSessions.entries()) {
+      if (sess.startTime < cutoffTime) {
+        connectionSessions.delete(key);
+        console.log(`[mcpDynamicHandler] 🧹 Cleaned up expired session: ${key}`);
+      }
+    }
   }
   
-  // Monthly limit
-  console.log(`[mcpDynamicHandler] Checking monthly usage limit...`);
-  const { allowed: allowedMonth, error: errorMonth, status: statusMonth, usage: monthlyUsage, plan: monthlyPlan } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_this_month' });
-  console.log(`[mcpDynamicHandler] Monthly usage check result: allowed=${allowedMonth}, error="${errorMonth}"`);
-  if (monthlyUsage && monthlyPlan) {
-    console.log(`[mcpDynamicHandler] 📊 MONTHLY USAGE: ${monthlyUsage.requests_this_month || 0}/${monthlyPlan.max_requests_per_month || 'unlimited'} requests (${monthlyUsage.requests_this_month_date})`);
+  let session = connectionSessions.get(sessionKey);
+  let shouldTrackUsage = true;
+  
+  // Check if we're in an active connection session
+  if (!session || (now - session.startTime) > SESSION_WINDOW_MS) {
+    // Start new session - do NOT count the very first handshake request
+    session = { startTime: now, requestCount: 1 };
+    connectionSessions.set(sessionKey, session);
+    shouldTrackUsage = false; // handshake is free
+    console.log(`[mcpDynamicHandler] 🔌 NEW CONNECTION SESSION STARTED for ${clientFingerprint}`);
+    console.log(`[mcpDynamicHandler] 🆓 Connection request #1 (initial handshake) - NOT COUNTING`);
+  } else {
+    // Within existing session window
+    session.requestCount++;
+    const secondsInSession = Math.round((now - session.startTime) / 1000);
+    console.log(`[mcpDynamicHandler] 📊 Session request #${session.requestCount} (${secondsInSession}s in session)`);
+    console.log(`[mcpDynamicHandler] Debug: shouldTrackUsage currently ${shouldTrackUsage}`);
+    
+    if (session.requestCount <= MAX_FREE_REQUESTS) {
+      shouldTrackUsage = false; // Don't count subsequent requests in handshake
+      console.log(`[mcpDynamicHandler] 🆓 Connection handshake request ${session.requestCount}/${MAX_FREE_REQUESTS} - NOT COUNTING (free in session)`);
+    } else {
+      shouldTrackUsage = true; // Count requests beyond handshake limit
+      console.log(`[mcpDynamicHandler] 💰 Request beyond handshake limit (#${session.requestCount}) - COUNTING`);
+    }
   }
-  if (!allowedMonth) {
-    console.warn(`[mcpDynamicHandler] Monthly quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorMonth}`);
-    return c.json({ error: errorMonth }, statusMonth ?? 429);
+  
+  if (shouldTrackUsage) {
+    // Daily limit
+    console.log(`[mcpDynamicHandler] Checking daily usage limit...`);
+    const { allowed: allowedDay, error: errorDay, status: statusDay, usage: dailyUsage, plan: dailyPlan } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_today' });
+    console.log(`[mcpDynamicHandler] Daily usage check result: allowed=${allowedDay}, error="${errorDay}"`);
+    if (dailyUsage && dailyPlan) {
+      console.log(`[mcpDynamicHandler] 📊 DAILY USAGE: ${dailyUsage.requests_today || 0}/${dailyPlan.max_requests_per_day || 'unlimited'} requests (${dailyUsage.requests_today_date})`);
+    }
+    if (!allowedDay) {
+      console.warn(`[mcpDynamicHandler] Daily quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorDay}`);
+      return c.json({ error: errorDay }, statusDay ?? 429);
+    }
+    
+    // Monthly limit
+    console.log(`[mcpDynamicHandler] Checking monthly usage limit...`);
+    const { allowed: allowedMonth, error: errorMonth, status: statusMonth, usage: monthlyUsage, plan: monthlyPlan } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_this_month', increment: 0 });
+    console.log(`[mcpDynamicHandler] Monthly usage check result: allowed=${allowedMonth}, error="${errorMonth}"`);
+    if (monthlyUsage && monthlyPlan) {
+      console.log(`[mcpDynamicHandler] 📊 MONTHLY USAGE: ${monthlyUsage.requests_this_month || 0}/${monthlyPlan.max_requests_per_month || 'unlimited'} requests (${monthlyUsage.requests_this_month_date})`);
+    }
+    if (!allowedMonth) {
+      console.warn(`[mcpDynamicHandler] Monthly quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorMonth}`);
+      return c.json({ error: errorMonth }, statusMonth ?? 429);
+    }
+    // Mark that usage has been tracked for this request
+    usageTracked = true;
+  } else {
+    console.log(`[mcpDynamicHandler] ⏭️  SKIPPING usage tracking for this request`);
   }
+  
   console.log(`[mcpDynamicHandler] ==================== END USAGE TRACKING ====================`);
   // --- END USAGE TRACKING & LIMITING ---
 
@@ -1511,13 +1624,21 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
               console.log("[mcpDynamicHandler] MCP Payload to be handled (from c.req.json()):", JSON.stringify(mcpPayload, null, 2));
               
               // Log the specific MCP method being called
-              if (mcpPayload.method) {
-                console.log(`[mcpDynamicHandler] 🔄 SESSION MCP METHOD: ${mcpPayload.method}`);
-                console.log(`[mcpDynamicHandler] 🔄 SESSION MCP ID: ${mcpPayload.id || 'No ID'}`);
-                if (mcpPayload.params) {
-                  console.log(`[mcpDynamicHandler] 🔄 SESSION MCP PARAMS:`, JSON.stringify(mcpPayload.params, null, 2));
-                }
-              }
+                                if (mcpPayload.method) {
+                    console.log(`[mcpDynamicHandler] 🔄 SESSION MCP METHOD: ${mcpPayload.method}`);
+                    console.log(`[mcpDynamicHandler] 🔄 SESSION MCP ID: ${mcpPayload.id || 'No ID'}`);
+                    
+                    // Track MCP protocol methods for debugging
+                    if (NON_BILLABLE_METHODS.includes(mcpPayload.method)) {
+                      console.log(`[mcpDynamicHandler] 📋 SESSION PROTOCOL METHOD: This is a standard MCP protocol handshake method`);
+                    } else {
+                      console.log(`[mcpDynamicHandler] 💰 SESSION BILLABLE METHOD: This is a billable API call`);
+                    }
+                    
+                    if (mcpPayload.params) {
+                      console.log(`[mcpDynamicHandler] 🔄 SESSION MCP PARAMS:`, JSON.stringify(mcpPayload.params, null, 2));
+                    }
+                  }
               
               console.log("[mcpDynamicHandler] ==================== END MCP REQUEST PAYLOAD (SESSION) ====================");
           }
@@ -1580,37 +1701,13 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
 
     transport.onerror = console.error.bind(console);
     mcpServer.server.onerror = console.error.bind(console);
-
-    const mcpBasePath = `/mcp/${mcpIdentifier}`;
-    if (c.req.method === 'GET' && (path === mcpBasePath || path === `${mcpBasePath}/`) && (c.req.header("accept") || "").includes("text/html")) {
-      console.log(`[mcpDynamicHandler] Serving HTML info page for project "${project.name}"`);
-       // const requestUrl = new URL(c.req.url);
-        const baseUrl = process.env.MCP_FRONTEND_BASE_URL || 'https://mcpdploy.com'; 
-        //|| 'http://localhost:3001';
-        //`${requestUrl.protocol}//${requestUrl.host}`;
-      // Ensure generateInfoPage uses project.mcp_resources etc directly
-      const htmlContent = generateInfoPage(mcpIdentifier, project, project.mcp_resources || [], project.mcp_tools || [], project.mcp_prompts || [], baseUrl);
-      mcpServer.close();
-      transport.close();
-      return c.html(htmlContent);
-    }
-
-    if (c.req.method === 'GET') {
-      console.log(`[mcpDynamicHandler] Received GET request for MCP endpoint (not HTML). Returning 405 Method Not Allowed.`);
-      mcpServer.close(); 
-      transport.close();
-      return c.json(
-        { jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed. MCP expects POST for RPC calls." }, id: null }, 
-        405
-      );
-    }
     
     const { req, res } = toReqRes(c.req.raw);
     let mcpPayload: any;
     if (c.req.header('content-type')?.includes('application/json')) {
         try {
             mcpPayload = await c.req.json();
-            if (mcpPayload) {
+                          if (mcpPayload) {
                   console.log("[mcpDynamicHandler] ==================== MCP REQUEST PAYLOAD ====================");
                 console.log("[mcpDynamicHandler] MCP Payload to be handled (from c.req.json()):", JSON.stringify(mcpPayload, null, 2));
                 
@@ -1618,6 +1715,14 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
                 if (mcpPayload.method) {
                   console.log(`[mcpDynamicHandler] 🔄 MCP METHOD: ${mcpPayload.method}`);
                   console.log(`[mcpDynamicHandler] 🔄 MCP ID: ${mcpPayload.id || 'No ID'}`);
+                  
+                  // Track MCP protocol methods for debugging
+                  if (NON_BILLABLE_METHODS.includes(mcpPayload.method)) {
+                    console.log(`[mcpDynamicHandler] 📋 PROTOCOL METHOD: This is a standard MCP protocol handshake method`);
+                  } else {
+                    console.log(`[mcpDynamicHandler] 💰 BILLABLE METHOD: This is a billable API call`);
+                  }
+                  
                   if (mcpPayload.params) {
                     console.log(`[mcpDynamicHandler] 🔄 MCP PARAMS:`, JSON.stringify(mcpPayload.params, null, 2));
                   }
@@ -1641,6 +1746,41 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
     if (c.req.method === 'POST' && !mcpPayload && c.req.header('content-length') && c.req.header('content-length') !== '0') {
         console.warn("[mcpDynamicHandler] POST request with Content-Length but mcpPayload is not set. Body parsing might have failed silently or was not JSON.");
     }
+
+    // -------------------- POST-PAYLOAD USAGE TRACKING CORRECTION --------------------
+    try {
+      const methodName: string | undefined = typeof mcpPayload === 'object' && mcpPayload !== null ? mcpPayload.method : undefined;
+      const isBillableMethod = methodName ? !NON_BILLABLE_METHODS.includes(methodName) : false;
+
+      if (!usageTracked && isBillableMethod) {
+        console.log(`[mcpDynamicHandler] 📝 Post-payload check: request is billable (method="${methodName}") but usage was not yet tracked. Performing tracking now.`);
+
+        // Daily limit
+        console.log(`[mcpDynamicHandler] (Late) Checking daily usage limit...`);
+        const { allowed: allowedDayLate, error: errorDayLate, status: statusDayLate, usage: dailyUsageLate, plan: dailyPlanLate } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_today' });
+        if (dailyUsageLate && dailyPlanLate) {
+          console.log(`[mcpDynamicHandler] 📊 (Late) DAILY USAGE: ${dailyUsageLate.requests_today || 0}/${dailyPlanLate.max_requests_per_day || 'unlimited'} requests (${dailyUsageLate.requests_today_date})`);
+        }
+        if (!allowedDayLate) {
+          console.warn(`[mcpDynamicHandler] (Late) Daily quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorDayLate}`);
+          return c.json({ error: errorDayLate }, statusDayLate ?? 429);
+        }
+
+        // Monthly limit (validate only)
+        console.log(`[mcpDynamicHandler] (Late) Checking monthly usage limit...`);
+        const { allowed: allowedMonthLate, error: errorMonthLate, status: statusMonthLate } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_this_month', increment: 0 });
+        if (!allowedMonthLate) {
+          console.warn(`[mcpDynamicHandler] (Late) Monthly quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorMonthLate}`);
+          return c.json({ error: errorMonthLate }, statusMonthLate ?? 429);
+        }
+
+        usageTracked = true;
+        console.log(`[mcpDynamicHandler] 📝 Post-payload usage tracking complete.`);
+      }
+    } catch (lateTrackErr) {
+      console.error('[mcpDynamicHandler] Error during late usage tracking:', lateTrackErr);
+    }
+    // ------------------ END POST-PAYLOAD USAGE TRACKING CORRECTION ------------------
 
     try {
       console.log(`[mcpDynamicHandler] Forwarding to transport.handleRequest. Method: ${req.method}, Payload defined: ${mcpPayload !== undefined}`);

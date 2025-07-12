@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { supabaseAuthMiddleware } from './middleware/auth';
+import { analyticsMiddleware } from './middleware/analytics';
 import { authRoutes } from './routes/auth';
 import { openapiRoutes } from './routes/openapi';
 import { managementRoutes } from './routes/management';
 import { mcpDynamicHandler } from './mcp/handler';
 import { supportRoutes } from './routes/support';
+import { analyticsRoutes } from './routes/analytics';
 
 // Define environment bindings for Cloudflare Workers
 type Env = {
@@ -60,6 +62,15 @@ app.use('/subscription/resume', supabaseAuthMiddleware);
 app.use('/stripe/create-checkout-session', supabaseAuthMiddleware);
 app.use('/auth/change-password', supabaseAuthMiddleware);
 app.use('/support/tickets', supabaseAuthMiddleware);
+app.use('/analytics/*', supabaseAuthMiddleware);
+
+// Apply analytics middleware after auth for protected routes
+app.use('/mcp-projects', analyticsMiddleware);
+app.use('/mcp-projects/*', analyticsMiddleware);
+// Note: /mcp/* routes have their own usage tracking in mcpDynamicHandler
+app.use('/subscription/*', analyticsMiddleware);
+app.use('/analytics/*', analyticsMiddleware);
+app.use('/support/*', analyticsMiddleware);
 
 // Dynamic MCP server routes (match any identifier)
 app.all('/mcp/:mcpIdentifier/*', mcpDynamicHandler);
@@ -74,5 +85,6 @@ app.route('/', openapiRoutes);
 app.route('/', authRoutes);
 app.route('/', managementRoutes);
 app.route('/', supportRoutes);
+app.route('/', analyticsRoutes);
 
 export default app;

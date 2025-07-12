@@ -687,3 +687,664 @@ authRoutes.post('/auth/reset-password', async (c) => {
     return c.json({ error: 'Internal server error.' }, 500);
   }
 }); 
+
+authRoutes.post('/auth/google', async (c) => {
+  try {
+    const { redirectTo } = await c.req.json();
+    const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    const siteUrl = c.env?.SITE_URL || process.env.SITE_URL || 'https://mcpdploy.com';
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return c.json({ error: 'Supabase URL and Anon Key must be provided.' }, 500);
+    }
+
+    // Build the OAuth URL for Google
+    const finalRedirectTo = redirectTo || `${siteUrl}/auth/callback`;
+    
+    // Use Supabase JS Client to get OAuth URL
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: finalRedirectTo,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent'
+        }
+      }
+    });
+
+    if (error) {
+      console.error('[Google OAuth] Error:', error);
+      return c.json({ error: error.message || 'Failed to initiate Google login.' }, 400);
+    }
+
+    if (!data?.url) {
+      return c.json({ error: 'Failed to generate OAuth URL.' }, 500);
+    }
+
+    const responseHeaders = new Headers({
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    });
+
+    return new Response(
+      JSON.stringify({ 
+        url: data.url,
+        provider: 'google'
+      }), 
+      { 
+        status: 200, 
+        headers: responseHeaders 
+      }
+    );
+  } catch (error) {
+    console.error('[Google OAuth] Unexpected error:', error);
+    return c.json({ error: 'Internal server error.' }, 500);
+  }
+});
+
+authRoutes.get('/auth/providers', async (c) => {
+  try {
+    const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return c.json({ error: 'Supabase URL and Anon Key must be provided.' }, 500);
+    }
+
+    // Return available OAuth providers
+    const providers = [
+      {
+        name: 'google',
+        displayName: 'Google',
+        icon: 'https://www.google.com/favicon.ico',
+        enabled: true
+      }
+      // Add more providers here as you enable them in Supabase
+      // {
+      //   name: 'github',
+      //   displayName: 'GitHub',
+      //   icon: 'https://github.com/favicon.ico',
+      //   enabled: true
+      // }
+    ];
+
+    const responseHeaders = new Headers({
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type'
+    });
+
+    return new Response(
+      JSON.stringify({ providers }), 
+      { 
+        status: 200, 
+        headers: responseHeaders 
+      }
+    );
+  } catch (error) {
+    console.error('[Auth Providers] Unexpected error:', error);
+    return c.json({ error: 'Internal server error.' }, 500);
+  }
+});
+
+authRoutes.post('/auth/oauth-callback', async (c) => {
+  try {
+    const { access_token, refresh_token, provider_token, provider_refresh_token } = await c.req.json();
+    const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return c.json({ error: 'Supabase URL and Anon Key must be provided.' }, 500);
+    }
+
+    // Verify the session and get user details
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const { data: { user }, error } = await supabase.auth.getUser(access_token);
+
+    if (error || !user) {
+      console.error('[OAuth Callback] Error verifying user:', error);
+      return c.json({ error: 'Invalid OAuth session.' }, 401);
+    }
+
+    // Check if this is a new user (first time OAuth login)
+    const isNewUser = !user.confirmed_at || new Date(user.created_at).getTime() === new Date(user.confirmed_at).getTime();
+
+    if (isNewUser) {
+      // Assign free plan to new OAuth users
+      try {
+        const userId = user.id;
+        
+        // Find the free plan
+        const { data: freePlan, error: planError } = await import('../lib/supabaseClient').then(({ supabase }) =>
+          supabase.from('subscription_plans')
+            .select('*')
+            .eq('name', 'Free')
+            .eq('price', 0)
+            .limit(1)
+            .single()
+        );
+
+        if (!planError && freePlan && freePlan.id) {
+          // Check if subscription already exists
+          const { data: existing, error: existingError } = await import('../lib/supabaseClient').then(({ supabase }) =>
+            supabase.from('user_subscriptions').select('id').eq('user_id', userId).single()
+          );
+
+          if (existingError || !existing) {
+            // Insert new subscription
+            await import('../lib/supabaseClient').then(({ supabase }) =>
+              supabase.from('user_subscriptions').upsert([
+                {
+                  user_id: userId,
+                  plan_id: freePlan.id,
+                  status: 'active',
+                  current_period_end: null,
+                  usage: {},
+                  usage_v2: {
+                    requests_today: 0,
+                    requests_today_date: null,
+                    requests_this_month: 0,
+                    requests_this_month_date: null,
+                    requests_this_year: 0,
+                    requests_this_year_date: null,
+                    total_requests: 0,
+                    last_request_at: null,
+                    custom_domains: 0,
+                    projects: 0
+                  }
+                }
+              ], { onConflict: 'user_id' })
+            );
+          }
+        } else {
+          console.error('[OAuth Callback] Could not find free plan:', planError);
+        }
+      } catch (err: any) {
+        console.error('[OAuth Callback] Error assigning free plan:', err);
+      }
+    }
+
+    const responseHeaders = new Headers({
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    });
+
+    return new Response(
+      JSON.stringify({
+        user,
+        access_token,
+        refresh_token,
+        provider_token,
+        provider_refresh_token,
+        isNewUser
+      }), 
+      { 
+        status: 200, 
+        headers: responseHeaders 
+      }
+    );
+  } catch (error) {
+    console.error('[OAuth Callback] Unexpected error:', error);
+    return c.json({ error: 'Internal server error.' }, 500);
+  }
+}); 
+
+// Account Deactivation Endpoints
+
+// Deactivate user account (30-day grace period)
+authRoutes.post('/auth/deactivate', async (c) => {
+  try {
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      console.log("[Account Deactivation] No authorization header provided");
+      return c.json({ error: 'Authorization header required' }, 401);
+    }
+
+    const token = authHeader.substring(7);
+    const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    const supabaseServiceKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
+      console.error("[Account Deactivation] Missing Supabase configuration");
+      return c.json({ error: 'Server configuration error' }, 500);
+    }
+
+    // Verify user token
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+
+    if (userError || !user) {
+      console.error("[Account Deactivation] Invalid user token:", userError?.message);
+      return c.json({ error: 'Invalid or expired token' }, 401);
+    }
+
+    const userId = user.id;
+    console.log("[Account Deactivation] Starting deactivation process for user:", userId);
+
+    // Use service role client to update user metadata
+    const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+    const deactivatedAt = new Date().toISOString();
+
+    // Update user metadata with deactivation information
+    const { error: metadataError } = await serviceClient.auth.admin.updateUserById(userId, {
+      user_metadata: {
+        ...user.user_metadata,
+        account_status: 'deactivated',
+        deactivated_at: deactivatedAt,
+        deactivation_reason: 'user_requested',
+        scheduled_deletion_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      }
+    });
+
+    if (metadataError) {
+      console.error("[Account Deactivation] Failed to update user metadata:", metadataError.message);
+      return c.json({ error: 'Failed to deactivate account' }, 500);
+    }
+
+    // Log the deactivation for audit purposes
+    try {
+      await import('../lib/supabaseClient').then(({ supabase }) =>
+        supabase.from('usage_analytics').insert([{
+          user_id: userId,
+          method: 'POST',
+          endpoint: '/auth/deactivate',
+          status_code: 200,
+          metadata: {
+            action: 'account_deactivated',
+            deactivated_at: deactivatedAt,
+            reason: 'user_requested'
+          }
+        }])
+      );
+    } catch (logError) {
+      console.error("[Account Deactivation] Failed to log deactivation:", logError);
+      // Don't fail the request if logging fails
+    }
+
+    // Revoke all user sessions
+    try {
+      await serviceClient.auth.admin.signOut(userId);
+    } catch (signOutError) {
+      console.error("[Account Deactivation] Failed to revoke sessions:", signOutError);
+      // Don't fail the request if sign out fails
+    }
+
+    console.log("[Account Deactivation] Successfully deactivated account for user:", userId);
+
+    return c.json({
+      message: 'Account deactivated successfully. You have 30 days to reactivate your account before permanent deletion.',
+      deactivated_at: deactivatedAt,
+      scheduled_deletion_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    });
+
+  } catch (error) {
+    console.error("[Account Deactivation] Unexpected error:", error);
+    return c.json({ error: 'Internal server error during account deactivation' }, 500);
+  }
+});
+
+// Reactivate user account (remove deactivation status)
+authRoutes.post('/auth/reactivate', async (c) => {
+  try {
+    const { email, password } = await c.req.json();
+
+    if (!email || !password) {
+      return c.json({ error: 'Email and password are required' }, 400);
+    }
+
+    const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    const supabaseServiceKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
+      console.error("[Account Reactivation] Missing Supabase configuration");
+      return c.json({ error: 'Server configuration error' }, 500);
+    }
+
+    // First, authenticate the user to verify credentials
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (signInError || !signInData.user) {
+      console.log("[Account Reactivation] Authentication failed for email:", email);
+      return c.json({ error: 'Invalid credentials' }, 401);
+    }
+
+    const userId = signInData.user.id;
+    const userMetadata = signInData.user.user_metadata || {};
+
+    // Check if account is actually deactivated
+    if (userMetadata.account_status !== 'deactivated') {
+      console.log("[Account Reactivation] Account is not deactivated for user:", userId);
+      return c.json({ error: 'Account is not deactivated' }, 400);
+    }
+
+    // Check if the account is past the 30-day deletion period
+    const deactivatedAt = new Date(userMetadata.deactivated_at);
+    const now = new Date();
+    const daysSinceDeactivation = (now.getTime() - deactivatedAt.getTime()) / (1000 * 60 * 60 * 24);
+
+    if (daysSinceDeactivation > 30) {
+      console.log("[Account Reactivation] Account is past 30-day grace period for user:", userId);
+      return c.json({ error: 'Account is past the 30-day reactivation period and scheduled for deletion' }, 410);
+    }
+
+    // Use service role client to update user metadata
+    const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+    const reactivatedAt = new Date().toISOString();
+
+    // Remove deactivation metadata
+    const updatedMetadata = { ...userMetadata };
+    delete updatedMetadata.account_status;
+    delete updatedMetadata.deactivated_at;
+    delete updatedMetadata.deactivation_reason;
+    delete updatedMetadata.scheduled_deletion_at;
+
+    updatedMetadata.reactivated_at = reactivatedAt;
+    updatedMetadata.reactivation_count = (updatedMetadata.reactivation_count || 0) + 1;
+
+    const { error: metadataError } = await serviceClient.auth.admin.updateUserById(userId, {
+      user_metadata: updatedMetadata
+    });
+
+    if (metadataError) {
+      console.error("[Account Reactivation] Failed to update user metadata:", metadataError.message);
+      return c.json({ error: 'Failed to reactivate account' }, 500);
+    }
+
+    // Log the reactivation for audit purposes
+    try {
+      await import('../lib/supabaseClient').then(({ supabase }) =>
+        supabase.from('usage_analytics').insert([{
+          user_id: userId,
+          method: 'POST',
+          endpoint: '/auth/reactivate',
+          status_code: 200,
+          metadata: {
+            action: 'account_reactivated',
+            reactivated_at: reactivatedAt,
+            days_since_deactivation: Math.floor(daysSinceDeactivation)
+          }
+        }])
+      );
+    } catch (logError) {
+      console.error("[Account Reactivation] Failed to log reactivation:", logError);
+      // Don't fail the request if logging fails
+    }
+
+    console.log("[Account Reactivation] Successfully reactivated account for user:", userId);
+
+    return c.json({
+      message: 'Account reactivated successfully. You can now login normally.',
+      reactivated_at: reactivatedAt,
+      access_token: signInData.session?.access_token,
+      refresh_token: signInData.session?.refresh_token,
+      user: signInData.user
+    });
+
+  } catch (error) {
+    console.error("[Account Reactivation] Unexpected error:", error);
+    return c.json({ error: 'Internal server error during account reactivation' }, 500);
+  }
+});
+
+// Admin endpoint for permanent account cleanup (should be called by a cron job)
+authRoutes.post('/auth/cleanup-deactivated-accounts', async (c) => {
+  try {
+    // Check for admin authentication or API key
+    const adminKey = c.req.header('X-Admin-Key') || c.req.header('X-API-Key');
+    const expectedAdminKey = c.env?.ADMIN_API_KEY || process.env.ADMIN_API_KEY;
+
+    if (!adminKey || !expectedAdminKey || adminKey !== expectedAdminKey) {
+      console.log("[Account Cleanup] Unauthorized cleanup attempt");
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseServiceKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error("[Account Cleanup] Missing Supabase configuration");
+      return c.json({ error: 'Server configuration error' }, 500);
+    }
+
+    const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    console.log("[Account Cleanup] Starting cleanup process for accounts deactivated before:", thirtyDaysAgo);
+
+    // Get all users with deactivated accounts older than 30 days
+    const { data: users, error: listError } = await serviceClient.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000 // Process in batches if you have many users
+    });
+
+    if (listError) {
+      console.error("[Account Cleanup] Failed to list users:", listError.message);
+      return c.json({ error: 'Failed to list users' }, 500);
+    }
+
+    const usersToDelete = users.users.filter(user => {
+      const metadata = user.user_metadata || {};
+      return metadata.account_status === 'deactivated' && 
+             metadata.deactivated_at && 
+             new Date(metadata.deactivated_at) < new Date(thirtyDaysAgo);
+    });
+
+    console.log("[Account Cleanup] Found", usersToDelete.length, "accounts to delete");
+
+    const deletionResults = {
+      successful: 0,
+      failed: 0,
+      errors: [] as any[]
+    };
+
+    // Process each user for deletion
+    for (const user of usersToDelete) {
+      const userId = user.id;
+      console.log("[Account Cleanup] Processing deletion for user:", userId);
+
+      try {
+        // Delete all user-related data in correct order (foreign key constraints)
+        const { supabase } = await import('../lib/supabaseClient');
+
+        // 1. Delete user analytics
+        const { error: analyticsError } = await supabase
+          .from('usage_analytics')
+          .delete()
+          .eq('user_id', userId);
+
+        if (analyticsError) {
+          console.error("[Account Cleanup] Failed to delete analytics for user:", userId, analyticsError.message);
+        }
+
+        // 2. Delete support tickets
+        const { error: ticketsError } = await supabase
+          .from('support_tickets')
+          .delete()
+          .eq('user_id', userId);
+
+        if (ticketsError) {
+          console.error("[Account Cleanup] Failed to delete support tickets for user:", userId, ticketsError.message);
+        }
+
+        // 3. Get user projects to cascade delete sub-items
+        const { data: projects, error: projectsError } = await supabase
+          .from('mcp_servers')
+          .select('id')
+          .eq('user_id', userId);
+
+        if (projectsError) {
+          console.error("[Account Cleanup] Failed to get projects for user:", userId, projectsError.message);
+        } else if (projects && projects.length > 0) {
+          const projectIds = projects.map(p => p.id);
+
+          // Delete project sub-items
+          const { error: resourcesError } = await supabase
+            .from('mcp_resources')
+            .delete()
+            .in('server_id', projectIds);
+
+          const { error: toolsError } = await supabase
+            .from('mcp_tools')
+            .delete()
+            .in('server_id', projectIds);
+
+          const { error: promptsError } = await supabase
+            .from('mcp_prompts')
+            .delete()
+            .in('server_id', projectIds);
+
+          if (resourcesError || toolsError || promptsError) {
+            console.error("[Account Cleanup] Failed to delete project sub-items for user:", userId, {
+              resourcesError: resourcesError?.message,
+              toolsError: toolsError?.message,
+              promptsError: promptsError?.message
+            });
+          }
+
+          // Delete projects
+          const { error: projectDeleteError } = await supabase
+            .from('mcp_servers')
+            .delete()
+            .eq('user_id', userId);
+
+          if (projectDeleteError) {
+            console.error("[Account Cleanup] Failed to delete projects for user:", userId, projectDeleteError.message);
+          }
+        }
+
+        // 4. Delete user subscription
+        const { error: subscriptionError } = await supabase
+          .from('user_subscriptions')
+          .delete()
+          .eq('user_id', userId);
+
+        if (subscriptionError) {
+          console.error("[Account Cleanup] Failed to delete subscription for user:", userId, subscriptionError.message);
+        }
+
+        // 5. Log the deletion before deleting the user
+        await supabase.from('usage_analytics').insert([{
+          user_id: userId,
+          method: 'DELETE',
+          endpoint: '/auth/cleanup-deactivated-accounts',
+          status_code: 200,
+          metadata: {
+            action: 'account_permanently_deleted',
+            deleted_at: new Date().toISOString(),
+            deactivated_at: user.user_metadata?.deactivated_at,
+            projects_deleted: projects?.length || 0
+          }
+        }]);
+
+        // 6. Finally, delete the user from Supabase Auth
+        const { error: userDeleteError } = await serviceClient.auth.admin.deleteUser(userId);
+
+        if (userDeleteError) {
+          console.error("[Account Cleanup] Failed to delete user from auth:", userId, userDeleteError.message);
+          deletionResults.failed++;
+          deletionResults.errors.push({
+            userId,
+            error: userDeleteError.message,
+            step: 'auth_deletion'
+          });
+        } else {
+          console.log("[Account Cleanup] Successfully deleted user:", userId);
+          deletionResults.successful++;
+        }
+
+      } catch (error) {
+        console.error("[Account Cleanup] Unexpected error deleting user:", userId, error);
+        deletionResults.failed++;
+        deletionResults.errors.push({
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+          step: 'unexpected_error'
+        });
+      }
+    }
+
+    console.log("[Account Cleanup] Cleanup process completed:", deletionResults);
+
+    return c.json({
+      message: 'Account cleanup completed',
+      processed: usersToDelete.length,
+      successful: deletionResults.successful,
+      failed: deletionResults.failed,
+      errors: deletionResults.errors
+    });
+
+  } catch (error) {
+    console.error("[Account Cleanup] Unexpected error in cleanup process:", error);
+    return c.json({ error: 'Internal server error during cleanup' }, 500);
+  }
+});
+
+// Helper endpoint to check account status
+authRoutes.get('/auth/account-status', async (c) => {
+  try {
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return c.json({ error: 'Authorization header required' }, 401);
+    }
+
+    const token = authHeader.substring(7);
+    const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return c.json({ error: 'Server configuration error' }, 500);
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+
+    if (userError || !user) {
+      return c.json({ error: 'Invalid or expired token' }, 401);
+    }
+
+    const userMetadata = user.user_metadata || {};
+    const accountStatus = userMetadata.account_status || 'active';
+
+    let response: any = {
+      user_id: user.id,
+      email: user.email,
+      account_status: accountStatus,
+      created_at: user.created_at
+    };
+
+    if (accountStatus === 'deactivated') {
+      const deactivatedAt = new Date(userMetadata.deactivated_at);
+      const scheduledDeletionAt = new Date(userMetadata.scheduled_deletion_at);
+      const now = new Date();
+      const daysUntilDeletion = Math.ceil((scheduledDeletionAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+      response = {
+        ...response,
+        deactivated_at: userMetadata.deactivated_at,
+        scheduled_deletion_at: userMetadata.scheduled_deletion_at,
+        days_until_deletion: Math.max(0, daysUntilDeletion),
+        can_reactivate: daysUntilDeletion > 0
+      };
+    }
+
+    return c.json(response);
+
+  } catch (error) {
+    console.error("[Account Status] Unexpected error:", error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+}); 

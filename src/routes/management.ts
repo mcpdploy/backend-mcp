@@ -18,11 +18,14 @@ export const managementRoutes = new Hono<any>(); // Using <any> for broader comp
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2025-05-28.basil' });
 
+//===============================================================================================================
 // --- Helper: Get User ID from context ---
 async function getUserIdFromContext(c: any): Promise<string | null> {
   return c.var.userId;
 }
+//===============================================================================================================
 
+//===============================================================================================================
 // Helper to get a privileged Supabase client
 function getPrivilegedSupabaseClient(c: any) {
   const serviceRoleKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -37,9 +40,11 @@ function getPrivilegedSupabaseClient(c: any) {
     { global: { headers: { Authorization: `Bearer ${userJwt}` } } }
   );
 }
+//===============================================================================================================
 
 // --- USAGE TRACKING & LIMITING HELPERS ---
 export async function checkAndIncrementUsage({ userId, usageType, increment = 1, customDate }: { userId: string, usageType: string, increment?: number, customDate?: Date }) {
+  console.log(`[checkAndIncrementUsage] >>> Enter function - userId=${userId}, usageType=${usageType}, increment=${increment}`);
   // Fetch user subscription and plan
   const { data: userSub, error: userSubError } = await supabase
     .from('user_subscriptions')
@@ -56,12 +61,15 @@ export async function checkAndIncrementUsage({ userId, usageType, increment = 1,
     console.error('[Usage Limit] No plan found for user subscription:', userSub);
     return { allowed: false, error: 'No plan found for user subscription', status: 500 };
   }
-  let usage = userSub.usage || {};
+  
+  // Use usage_v2 if available, fallback to usage
+  let usage = userSub.usage_v2 || userSub.usage || {};
   let now = customDate || new Date();
   let today = now.toISOString().slice(0, 10); // YYYY-MM-DD
   let month = now.toISOString().slice(0, 7); // YYYY-MM
+  let year = now.toISOString().slice(0, 4); // YYYY
 
-  // Handle daily/monthly resets
+  // Handle daily/monthly/yearly resets
   if (usage.requests_today_date !== today) {
     usage.requests_today = 0;
     usage.requests_today_date = today;
@@ -69,6 +77,10 @@ export async function checkAndIncrementUsage({ userId, usageType, increment = 1,
   if (usage.requests_this_month_date !== month) {
     usage.requests_this_month = 0;
     usage.requests_this_month_date = month;
+  }
+  if (usage.requests_this_year_date !== year) {
+    usage.requests_this_year = 0;
+    usage.requests_this_year_date = year;
   }
 
   // Check limits
@@ -101,24 +113,107 @@ export async function checkAndIncrementUsage({ userId, usageType, increment = 1,
     }
   }
 
-  // Increment usage
-  if (usageType === 'requests_today') usage.requests_today = (usage.requests_today || 0) + increment;
-  if (usageType === 'requests_this_month') usage.requests_this_month = (usage.requests_this_month || 0) + increment;
+  // Increment usage based on type
+  if (usageType === 'requests_today') {
+    usage.requests_today = (usage.requests_today || 0) + increment;
+    usage.requests_this_month = (usage.requests_this_month || 0) + increment;
+    usage.requests_this_year = (usage.requests_this_year || 0) + increment;
+    usage.total_requests = (usage.total_requests || 0) + increment;
+    usage.last_request_at = now.toISOString();
+  }
+  if (usageType === 'requests_this_month') {
+    usage.requests_this_month = (usage.requests_this_month || 0) + increment;
+    usage.requests_this_year = (usage.requests_this_year || 0) + increment;
+    usage.total_requests = (usage.total_requests || 0) + increment;
+    usage.last_request_at = now.toISOString();
+  }
   if (usageType === 'custom_domains') usage.custom_domains = (usage.custom_domains || 0) + increment;
 
-  // Save usage
+  // Log usage object before update
+  console.log(`[checkAndIncrementUsage] Usage object before DB update:`, JSON.stringify(usage, null, 2));
+
+  // Save usage - update to use usage_v2
   const { error: usageUpdateError } = await supabase
     .from('user_subscriptions')
-    .update({ usage })
+    .update({ usage_v2: usage, usage: usage })
     .eq('user_id', userId)
     .eq('status', 'active');
   if (usageUpdateError) {
     console.error('[Usage Limit] Failed to update usage for user:', userId, usageUpdateError);
     return { allowed: false, error: 'Failed to update usage. Please try again.', status: 500 };
   }
+  if (usageUpdateError) {
+    console.log(`[checkAndIncrementUsage] <<< Exit with failure (usageUpdateError)`);
+  } else {
+    console.log(`[checkAndIncrementUsage] <<< Exit success - updated usage.`);
+  }
   return { allowed: true, usage, plan };
 }
+
+// New function to log detailed analytics
+export async function logDetailedAnalytics({
+  userId,
+  projectId,
+  method,
+  endpoint,
+  statusCode,
+  responseTimeMs,
+  requestSize,
+  responseSize,
+  errorType,
+  errorMessage,
+  userAgent,
+  ipAddress,
+  resourceType,
+  resourceId,
+  metadata = {}
+}: {
+  userId: string;
+  projectId?: string;
+  method: string;
+  endpoint: string;
+  statusCode: number;
+  responseTimeMs?: number;
+  requestSize?: number;
+  responseSize?: number;
+  errorType?: string;
+  errorMessage?: string;
+  userAgent?: string;
+  ipAddress?: string;
+  resourceType?: string;
+  resourceId?: string;
+  metadata?: Record<string, any>;
+}) {
+  try {
+    const { error } = await supabase
+      .from('usage_analytics')
+      .insert([{
+        user_id: userId,
+        project_id: projectId,
+        method,
+        endpoint,
+        status_code: statusCode,
+        response_time_ms: responseTimeMs,
+        request_size_bytes: requestSize,
+        response_size_bytes: responseSize,
+        error_type: errorType,
+        error_message: errorMessage,
+        user_agent: userAgent,
+        ip_address: ipAddress,
+        resource_type: resourceType,
+        resource_id: resourceId,
+        metadata
+      }]);
+
+    if (error) {
+      console.error('[Analytics] Failed to log analytics:', error);
+    }
+  } catch (err) {
+    console.error('[Analytics] Exception logging analytics:', err);
+  }
+}
 // --- END USAGE TRACKING & LIMITING HELPERS ---
+//=====================================================================================================================================================
 
 // == MCP Projects ==
 managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCreateSchema.parse(value)), async (c) => {
@@ -219,6 +314,8 @@ managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCr
   }
 });
 
+//========================================================================================================================================================================
+
 managementRoutes.get('/mcp-projects', async (c) => {
   const userId = await getUserIdFromContext(c);
   if (!userId) return c.json({ error: "Unauthorized: Invalid or missing token" }, 401 as any);
@@ -226,6 +323,8 @@ managementRoutes.get('/mcp-projects', async (c) => {
   if (error) return c.json({ error: error.message }, 500);
   return c.json(data);
 });
+
+//========================================================================================================================================================================
 
 managementRoutes.get('/mcp-projects/:id', async (c) => {
   const userId = await getUserIdFromContext(c);
@@ -241,6 +340,8 @@ managementRoutes.get('/mcp-projects/:id', async (c) => {
   if (error || !data) return c.json({ error: "https://mcpdploy.comt found or access denied" }, 404);
   return c.json(data);
 });
+
+//========================================================================================================================================================================
 
 managementRoutes.put('/mcp-projects/:id', validator('json', (value) => mcpProjectUpdateSchema.parse(value)), async (c) => {
   const userId = await getUserIdFromContext(c);
@@ -331,6 +432,8 @@ managementRoutes.put('/mcp-projects/:id', validator('json', (value) => mcpProjec
   }
 });
 
+//========================================================================================================================================================================
+
 managementRoutes.delete('/mcp-projects/:id', async (c) => {
   const userId = await getUserIdFromContext(c);
   if (!userId) return c.json({ error: "Unauthorized: Invalid or missing token" }, 401 as ContentfulStatusCode);
@@ -346,6 +449,8 @@ managementRoutes.delete('/mcp-projects/:id', async (c) => {
   if (error) return c.json({ error: error.message }, error.message?.includes("not found") || error.code === 'PGRST116' ? 404 : 500);
   return c.json({ message: "Project deleted successfully" }, 200);
 });
+
+//========================================================================================================================================================================
 
 // Create Stripe Checkout Session
 managementRoutes.post('/stripe/create-checkout-session', async (c) => {
@@ -382,6 +487,8 @@ managementRoutes.post('/stripe/create-checkout-session', async (c) => {
   });
   return c.json({ url: session.url });
 });
+
+//========================================================================================================================================================================
 
 // Stripe Webhook
 managementRoutes.post('/stripe/webhook', async (c) => {
@@ -474,6 +581,8 @@ managementRoutes.post('/stripe/webhook', async (c) => {
   return c.json({ received: true });
 });
 
+//========================================================================================================================================================================
+
 // Get current user's subscription plan
 managementRoutes.get('/subscription/plan', async (c) => {
   const userId = await getUserIdFromContext(c);
@@ -507,12 +616,16 @@ managementRoutes.get('/subscription/plan', async (c) => {
   return c.json(enhancedSub);
 });
 
+//========================================================================================================================================================================
+
 // Get all available subscription plans
 managementRoutes.get('/subscription/plans', async (c) => {
   const { data: plans, error } = await supabase.from('subscription_plans').select('*');
   if (error) return c.json({ error: error.message }, 500);
   return c.json(plans);
 });
+
+//========================================================================================================================================================================
 
 // Cancel Subscription Endpoint
 managementRoutes.post('/subscription/cancel', async (c) => {
@@ -558,6 +671,8 @@ managementRoutes.post('/subscription/cancel', async (c) => {
 
   return c.json({ message: 'Subscription will remain active until the end of the billing period and then be canceled.' });
 });
+
+//========================================================================================================================================================================
 
 // Resume (Uncancel) Subscription Endpoint
 managementRoutes.post('/subscription/resume', async (c) => {
@@ -605,6 +720,8 @@ managementRoutes.post('/subscription/resume', async (c) => {
   return c.json({ message: 'Subscription will continue and will not be canceled at period end.' });
 });
 
+//========================================================================================================================================================================
+
 // Public endpoint to get all visible projects (no authentication required)
 managementRoutes.get('/public/mcp-projects', async (c) => {
   try {
@@ -621,8 +738,8 @@ managementRoutes.get('/public/mcp-projects', async (c) => {
         endpoint,
         created_at
       `)
-      .eq("visible", true)
-      .eq("is_active", true);
+      .eq('visible', true)
+      .eq('is_active', true);
 
     if (error) {
       console.error("[GET /public/mcp-projects] Supabase error:", error);
@@ -636,17 +753,7 @@ managementRoutes.get('/public/mcp-projects', async (c) => {
   }
 });
 
-// == MCP API REQUESTS ==
-managementRoutes.all('/mcp/*', async (c, next) => {
-  // Usage tracking for API requests
-  const userId = await getUserIdFromContext(c);
-  if (!userId) return c.json({ error: 'Unauthorized' }, 401 as ContentfulStatusCode);
-  // Daily limit
-  const { allowed: allowedDay, error: errorDay, status: statusDay } = await checkAndIncrementUsage({ userId, usageType: 'requests_today' });
-  if (!allowedDay) return c.json({ error: errorDay }, statusDay ?? 500 as any);
-  // Monthly limit
-  const { allowed: allowedMonth, error: errorMonth, status: statusMonth } = await checkAndIncrementUsage({ userId, usageType: 'requests_this_month' });
-  if (!allowedMonth) return c.json({ error: errorMonth }, statusMonth ?? 500 as any);
-  // Continue to actual handler
-  await next();
-}); 
+//========================================================================================================================================================================
+
+// NOTE: MCP API request usage tracking has been moved to mcpDynamicHandler to avoid double counting
+//========================================================================================================================================================================
