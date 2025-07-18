@@ -210,7 +210,7 @@ authRoutes.post('/auth/signup', async (c) => {
           supabase.from('user_subscriptions').select('id').eq('user_id', userId).single()
         );
         if (existingError || !existing) {
-          // Insert new subscription
+          // Insert new subscription with comprehensive usage tracking
           await import('../lib/supabaseClient').then(({ supabase }) =>
             supabase.from('user_subscriptions').upsert([
               {
@@ -219,6 +219,18 @@ authRoutes.post('/auth/signup', async (c) => {
                 status: 'active',
                 current_period_end: null,
                 usage: {},
+                usage_v2: {
+                  requests_today: 0,
+                  requests_today_date: null,
+                  requests_this_month: 0,
+                  requests_this_month_date: null,
+                  requests_this_year: 0,
+                  requests_this_year_date: null,
+                  total_requests: 0,
+                  last_request_at: null,
+                  custom_domains: 0,
+                  projects: 0
+                }
               }
             ], { onConflict: 'user_id' })
           );
@@ -798,6 +810,7 @@ authRoutes.post('/auth/oauth-callback', async (c) => {
     const { access_token, refresh_token, provider_token, provider_refresh_token } = await c.req.json();
     const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
     const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    const supabaseServiceKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
     
     if (!supabaseUrl || !supabaseAnonKey) {
       return c.json({ error: 'Supabase URL and Anon Key must be provided.' }, 500);
@@ -812,13 +825,92 @@ authRoutes.post('/auth/oauth-callback', async (c) => {
       return c.json({ error: 'Invalid OAuth session.' }, 401);
     }
 
-    // Check if this is a new user (first time OAuth login)
-    const isNewUser = !user.confirmed_at || new Date(user.created_at).getTime() === new Date(user.confirmed_at).getTime();
+    const userId = user.id;
+    const userMetadata = user.user_metadata || {};
 
-    if (isNewUser) {
-      // Assign free plan to new OAuth users
-      try {
-        const userId = user.id;
+    // Check if account is deactivated and reactivate if within grace period
+    if (userMetadata.account_status === 'deactivated') {
+      console.log('[OAuth Callback] Deactivated account detected for user:', userId);
+      
+      // Check if the account is past the 30-day deletion period
+      const deactivatedAt = new Date(userMetadata.deactivated_at);
+      const now = new Date();
+      const daysSinceDeactivation = (now.getTime() - deactivatedAt.getTime()) / (1000 * 60 * 60 * 24);
+
+      if (daysSinceDeactivation > 30) {
+        console.log('[OAuth Callback] Account is past 30-day grace period for user:', userId);
+        return c.json({ error: 'Account is past the 30-day reactivation period and scheduled for deletion' }, 410);
+      }
+
+      // Reactivate the account
+      if (supabaseServiceKey) {
+        const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+        const reactivatedAt = new Date().toISOString();
+
+        // Remove deactivation metadata and set account to active
+        const updatedMetadata = { ...userMetadata };
+        updatedMetadata.account_status = 'active';
+        delete updatedMetadata.deactivated_at;
+        delete updatedMetadata.deactivation_reason;
+        delete updatedMetadata.scheduled_deletion_at;
+
+        updatedMetadata.reactivated_at = reactivatedAt;
+        updatedMetadata.reactivation_count = (updatedMetadata.reactivation_count || 0) + 1;
+        updatedMetadata.reactivation_method = 'oauth';
+
+        const { error: metadataError } = await serviceClient.auth.admin.updateUserById(userId, {
+          user_metadata: updatedMetadata
+        });
+
+        if (metadataError) {
+          console.error('[OAuth Callback] Failed to reactivate account:', metadataError.message);
+          return c.json({ error: 'Failed to reactivate account' }, 500);
+        }
+
+        // Log the reactivation for audit purposes
+        try {
+          await import('../lib/supabaseClient').then(({ supabase }) =>
+            supabase.from('usage_analytics').insert([{
+              user_id: userId,
+              method: 'POST',
+              endpoint: '/auth/oauth-callback',
+              status_code: 200,
+              metadata: {
+                action: 'account_reactivated_via_oauth',
+                reactivated_at: reactivatedAt,
+                days_since_deactivation: Math.floor(daysSinceDeactivation),
+                reactivation_method: 'oauth'
+              }
+            }])
+          );
+        } catch (logError) {
+          console.error('[OAuth Callback] Failed to log reactivation:', logError);
+          // Don't fail the request if logging fails
+        }
+
+        console.log('[OAuth Callback] Successfully reactivated account via OAuth for user:', userId);
+        
+        // Update the user object with the new metadata for the response
+        user.user_metadata = updatedMetadata;
+      } else {
+        console.error('[OAuth Callback] Service key not available for account reactivation');
+        return c.json({ error: 'Unable to reactivate account - server configuration error' }, 500);
+      }
+    }
+
+    // Check if user has a subscription (more reliable than trying to detect "new user")
+    let isNewUser = false;
+    
+    try {
+      // Check if subscription already exists
+      const { data: existingSub, error: existingError } = await import('../lib/supabaseClient').then(({ supabase }) =>
+        supabase.from('user_subscriptions').select('id').eq('user_id', userId).single()
+      );
+
+      // If no subscription exists, user needs the free plan
+      if (existingError || !existingSub) {
+        isNewUser = true;
+        console.log(`[OAuth Callback] No subscription found for user ${userId}, assigning free plan`);
         
         // Find the free plan
         const { data: freePlan, error: planError } = await import('../lib/supabaseClient').then(({ supabase }) =>
@@ -831,43 +923,44 @@ authRoutes.post('/auth/oauth-callback', async (c) => {
         );
 
         if (!planError && freePlan && freePlan.id) {
-          // Check if subscription already exists
-          const { data: existing, error: existingError } = await import('../lib/supabaseClient').then(({ supabase }) =>
-            supabase.from('user_subscriptions').select('id').eq('user_id', userId).single()
-          );
-
-          if (existingError || !existing) {
-            // Insert new subscription
-            await import('../lib/supabaseClient').then(({ supabase }) =>
-              supabase.from('user_subscriptions').upsert([
-                {
-                  user_id: userId,
-                  plan_id: freePlan.id,
-                  status: 'active',
-                  current_period_end: null,
-                  usage: {},
-                  usage_v2: {
-                    requests_today: 0,
-                    requests_today_date: null,
-                    requests_this_month: 0,
-                    requests_this_month_date: null,
-                    requests_this_year: 0,
-                    requests_this_year_date: null,
-                    total_requests: 0,
-                    last_request_at: null,
-                    custom_domains: 0,
-                    projects: 0
-                  }
+          // Insert new subscription
+          const { error: insertError } = await import('../lib/supabaseClient').then(({ supabase }) =>
+            supabase.from('user_subscriptions').upsert([
+              {
+                user_id: userId,
+                plan_id: freePlan.id,
+                status: 'active',
+                current_period_end: null,
+                usage: {},
+                usage_v2: {
+                  requests_today: 0,
+                  requests_today_date: null,
+                  requests_this_month: 0,
+                  requests_this_month_date: null,
+                  requests_this_year: 0,
+                  requests_this_year_date: null,
+                  total_requests: 0,
+                  last_request_at: null,
+                  custom_domains: 0,
+                  projects: 0
                 }
-              ], { onConflict: 'user_id' })
-            );
+              }
+            ], { onConflict: 'user_id' })
+          );
+          
+          if (insertError) {
+            console.error('[OAuth Callback] Failed to assign free plan:', insertError);
+          } else {
+            console.log(`[OAuth Callback] Successfully assigned free plan to user ${userId}`);
           }
         } else {
           console.error('[OAuth Callback] Could not find free plan:', planError);
         }
-      } catch (err: any) {
-        console.error('[OAuth Callback] Error assigning free plan:', err);
+      } else {
+        console.log(`[OAuth Callback] User ${userId} already has subscription`);
       }
+    } catch (err: any) {
+      console.error('[OAuth Callback] Error checking/assigning subscription:', err);
     }
 
     const responseHeaders = new Headers({
@@ -1045,9 +1138,9 @@ authRoutes.post('/auth/reactivate', async (c) => {
     const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
     const reactivatedAt = new Date().toISOString();
 
-    // Remove deactivation metadata
+    // Remove deactivation metadata and set account to active
     const updatedMetadata = { ...userMetadata };
-    delete updatedMetadata.account_status;
+    updatedMetadata.account_status = 'active';  // Explicitly set to active
     delete updatedMetadata.deactivated_at;
     delete updatedMetadata.deactivation_reason;
     delete updatedMetadata.scheduled_deletion_at;

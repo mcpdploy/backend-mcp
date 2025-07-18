@@ -98,7 +98,8 @@ analyticsRoutes.get('/analytics/daily', async (c) => {
   }
 
   try {
-    const { data, error } = await supabase
+    // Get daily stats from usage_daily_stats
+    const { data: dailyStats, error: dailyError } = await supabase
       .from('usage_daily_stats')
       .select('*')
       .eq('user_id', userId)
@@ -106,12 +107,76 @@ analyticsRoutes.get('/analytics/daily', async (c) => {
       .lte('date', endDate)
       .order('date', { ascending: false });
 
-    if (error) {
-      console.error('[Analytics Daily] Error:', error);
+    if (dailyError) {
+      console.error('[Analytics Daily] Error fetching daily stats:', dailyError);
       return c.json({ error: 'Failed to fetch daily analytics' }, 500);
     }
 
-    return c.json(data || []);
+    // Get current user subscription to access usage_v2 data
+    const { data: subscription, error: subError } = await supabase
+      .from('user_subscriptions')
+      .select('usage_v2')
+      .eq('user_id', userId)
+      .single();
+
+    if (subError) {
+      console.error('[Analytics Daily] Error fetching subscription:', subError);
+      // Continue without subscription data
+    }
+
+    // Extract current billable request count from usage_v2
+    const usageV2 = subscription?.usage_v2 || {};
+    const currentBillableRequests = usageV2.requests_today || 0;
+    const currentDate = usageV2.requests_today_date;
+
+    // Enhance the daily stats with billable request data
+    const enhancedStats = (dailyStats || []).map(stat => {
+      const enhancedStat = { ...stat };
+      
+      // Add billable requests for today's date if it matches
+      if (stat.date === currentDate) {
+        enhancedStat.billable_requests_today = currentBillableRequests;
+      } else {
+        // For historical dates, we don't have this data, so set to null
+        enhancedStat.billable_requests_today = null;
+      }
+      
+      return enhancedStat;
+    });
+
+    // If today's date is in the range but not in daily_stats, add it
+    const today = new Date().toISOString().slice(0, 10);
+    const hasToday = enhancedStats.some(stat => stat.date === today);
+    
+    if (!hasToday && today >= startDate && today <= endDate && currentDate === today) {
+      enhancedStats.unshift({
+        id: null,
+        user_id: userId,
+        date: today,
+        total_requests: 0,
+        successful_requests: 0,
+        failed_requests: 0,
+        get_requests: 0,
+        post_requests: 0,
+        put_requests: 0,
+        delete_requests: 0,
+        avg_response_time_ms: null,
+        p95_response_time_ms: null,
+        p99_response_time_ms: null,
+        total_request_bytes: 0,
+        total_response_bytes: 0,
+        unique_projects_accessed: 0,
+        unique_endpoints_accessed: 0,
+        auth_errors: 0,
+        rate_limit_errors: 0,
+        server_errors: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        billable_requests_today: currentBillableRequests
+      });
+    }
+
+    return c.json(enhancedStats);
   } catch (error) {
     console.error('[Analytics Daily] Unexpected error:', error);
     return c.json({ error: 'Internal server error' }, 500);
