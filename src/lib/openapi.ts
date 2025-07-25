@@ -1736,7 +1736,7 @@ export const openApiSpec = {
       post: {
         tags: ['Support'],
         summary: 'Submit Support Request',
-        description: 'Submit a support request. Can be used by both authenticated and anonymous users.',
+        description: 'Submit a support request. Can be used by both authenticated and anonymous users. Anonymous users should provide an email address to receive a response.',
         requestBody: {
           required: true,
           content: {
@@ -1744,6 +1744,12 @@ export const openApiSpec = {
               schema: {
                 type: 'object',
                 properties: {
+                  email: {
+                    type: 'string',
+                    format: 'email',
+                    description: 'Optional email address for contact. Required for anonymous users to receive a response.',
+                    example: 'user@example.com'
+                  },
                   subject: { 
                     type: 'string', 
                     description: 'The subject of the support request',
@@ -1759,14 +1765,15 @@ export const openApiSpec = {
                     description: 'Category of the support request',
                     enum: ['general', 'technical', 'billing', 'feature-request', 'bug-report'],
                     example: 'technical'
-                  }
+                  },
                 },
                 required: ['subject', 'message']
               },
               example: {
+                email: 'user@example.com',
                 subject: 'Unable to create new project',
                 message: 'I am getting an error when trying to create a new MCP project. The error says "Project limit reached" but I should have more projects available.',
-                category: 'technical'
+                category: 'technical',
               }
             }
           }
