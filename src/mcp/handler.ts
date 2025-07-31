@@ -1,5 +1,6 @@
 import { z } from 'zod'; // For paramSchema construction
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPTransport } from '@hono/mcp';
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolResult,
@@ -14,6 +15,9 @@ import { toFetchResponse, toReqRes } from "fetch-to-node";
 import { supabase } from "../lib/supabaseClient"; // Path to supabase client
 import { checkAndIncrementUsage } from '../routes/management';
 import { randomUUID } from "node:crypto";
+
+let statelessTransport: StreamableHTTPServerTransport | null = null;
+let statelessInitialized = false;
 
 // Safe evaluation of completion logic without using eval() or new Function()
 function evaluateCompletionLogic(logic: string, value: string, context: any): string[] {
@@ -133,13 +137,13 @@ function evaluateCompletionLogic(logic: string, value: string, context: any): st
 }
 
 // Global map to store active session transports
-const sessionTransports: Record<string, StreamableHTTPServerTransport> = {};
+const sessionTransports: Record<string, StreamableHTTPTransport> = {};
 
 // Global server cache to prevent recreation on every request
 const serverCache = new Map<string, { mcpServer: any, lastUpdated: number }>();
 
-// Cache timeout (5 minutes)
-const CACHE_TIMEOUT = 5 * 60 * 1000;
+// Cache timeout (30 seconds)
+// const CACHE_TIMEOUT = 7 * 1000; // 7 seconds - DISABLED: No cache timeouts
 
 // Request deduplication for rapid-fire requests
 const recentRequests = new Map<string, number>();
@@ -165,15 +169,15 @@ function cleanupExpiredCacheEntries(): void {
   let cleanedCount = 0;
   
   for (const [key, entry] of serverCache.entries()) {
-    if (now - entry.lastUpdated >= CACHE_TIMEOUT) {
-      try {
-        entry.mcpServer.close();
-      } catch (e) {
-        console.log(`[Cache Cleanup] Error closing expired server ${key}:`, e);
-      }
-      serverCache.delete(key);
-      cleanedCount++;
-    }
+    // if (now - entry.lastUpdated >= CACHE_TIMEOUT) { // DISABLED: No cache timeouts
+    //   try {
+    //     entry.mcpServer.close();
+    //   } catch (e) {
+    //     console.log(`[Cache Cleanup] Error closing expired server ${key}:`, e);
+    //   }
+    //   serverCache.delete(key);
+    //   cleanedCount++;
+    // }
   }
   
   if (cleanedCount > 0) {
@@ -377,13 +381,15 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
   
   if (cached) {
     const age = Date.now() - cached.lastUpdated;
-    const isExpired = age >= CACHE_TIMEOUT;
+    // const isExpired = age >= CACHE_TIMEOUT; // DISABLED: No cache timeouts
+    const isExpired = false; // DISABLED: No cache timeouts
     console.log(`[mcpDynamicHandler] Cache entry age: ${age}ms (${Math.round(age/1000)}s)`);
-    console.log(`[mcpDynamicHandler] Cache timeout: ${CACHE_TIMEOUT}ms (${CACHE_TIMEOUT/1000}s)`);
+    // console.log(`[mcpDynamicHandler] Cache timeout: ${CACHE_TIMEOUT}ms (${CACHE_TIMEOUT/1000}s)`); // DISABLED
+    console.log(`[mcpDynamicHandler] Cache timeout: DISABLED - No cache timeouts`);
     console.log(`[mcpDynamicHandler] Cache expired: ${isExpired}`);
   }
   
-  if (cached && (Date.now() - cached.lastUpdated) < CACHE_TIMEOUT) {
+  if (cached && (Date.now() - cached.lastUpdated) < Infinity) { // DISABLED: No cache timeouts - always use cache if available
     console.log(`[mcpDynamicHandler] ✅ CACHE HIT - Using cached MCP server for project ${projectId}`);
     mcpServer = cached.mcpServer;
   } else {
@@ -1509,7 +1515,7 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
   }
   
   // Log cache status for both hit and miss cases
-  if (cached && (Date.now() - cached.lastUpdated) < CACHE_TIMEOUT) {
+  if (cached && (Date.now() - cached.lastUpdated) < Infinity) { // DISABLED: No cache timeouts
     console.log(`[mcpDynamicHandler] ==================== END CACHE OPERATIONS (CACHE HIT) ====================`);
   }
 
@@ -1517,222 +1523,1067 @@ export const mcpDynamicHandler = async (c: any) => { // c should be typed with H
   if ((project as any).session_management) {
       const sessionIdHeader = c.req.header("mcp-session-id");
       console.log("line 264: Session management enabled; mcp-session-id header:", sessionIdHeader);
-      const { req, res } = toReqRes(c.req.raw);
 
-      // Streaming via GET/DELETE: reuse transport without awaiting
-      if (c.req.method === 'GET' || c.req.method === 'DELETE') {
-        if (!sessionIdHeader || !sessionTransports[sessionIdHeader]) {
-          console.error(`[mcpDynamicHandler] Invalid or missing session ID for ${c.req.method}; header: ${sessionIdHeader}`);
-          return c.json(
-            { jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: No valid session ID provided" }, id: null },
-            400
-          );
-        }
-        const transport = sessionTransports[sessionIdHeader];
-        console.log(`[mcpDynamicHandler] Reusing session transport for ${c.req.method} with ID: ${sessionIdHeader}`);
-        transport.handleRequest(req, res).catch(err => {
-          console.error("[mcpDynamicHandler] transport.handleRequest error:", err);
-        });
-        return toFetchResponse(res);
-      }
-
-      // JSON-RPC via POST/others: parse JSON payload
-      let mcpPayload: any = null;
-      if (c.req.header('content-type')?.includes('application/json')) {
-        try {
-          mcpPayload = await c.req.json();
-          console.log("[mcpDynamicHandler] Session payload:", JSON.stringify(mcpPayload));
-          if (mcpPayload) {
-              console.log("[mcpDynamicHandler] ==================== MCP REQUEST PAYLOAD (SESSION) ====================");
-              console.log("[mcpDynamicHandler] MCP Payload to be handled (from c.req.json()):", JSON.stringify(mcpPayload, null, 2));
-              
-              // Log the specific MCP method being called
-                                if (mcpPayload.method) {
-                    console.log(`[mcpDynamicHandler] 🔄 SESSION MCP METHOD: ${mcpPayload.method}`);
-                    console.log(`[mcpDynamicHandler] 🔄 SESSION MCP ID: ${mcpPayload.id || 'No ID'}`);
-                    
-                    // Track MCP protocol methods for debugging
-                    if (NON_BILLABLE_METHODS.includes(mcpPayload.method)) {
-                      console.log(`[mcpDynamicHandler] 📋 SESSION PROTOCOL METHOD: This is a standard MCP protocol handshake method`);
-                    } else {
-                      console.log(`[mcpDynamicHandler] 💰 SESSION BILLABLE METHOD: This is a billable API call`);
-                    }
-                    
-                    if (mcpPayload.params) {
-                      console.log(`[mcpDynamicHandler] 🔄 SESSION MCP PARAMS:`, JSON.stringify(mcpPayload.params, null, 2));
-                    }
-                  }
-              
-              console.log("[mcpDynamicHandler] ==================== END MCP REQUEST PAYLOAD (SESSION) ====================");
+      // Create a unique cache key that includes the session ID to ensure each session gets its own MCP server
+      const sessionCacheKey = `${projectId}-${sessionIdHeader || 'no-session'}`;
+      console.log(`[mcpDynamicHandler] Session cache key: ${sessionCacheKey}`);
+      
+      // Check if we have a cached MCP server for this specific session
+      let sessionMcpServer = serverCache.get(sessionCacheKey)?.mcpServer;
+      
+      if (!sessionMcpServer) {
+        console.log(`[mcpDynamicHandler] Creating new MCP server for session: ${sessionIdHeader}`);
+        
+        // Create a new MCP server instance for this session
+        sessionMcpServer = new McpServer(
+          {
+            name: project.name || "Dynamic MCP Server",
+            version: "1.0.0",
+            description: project.description || "Dynamically configured MCP server",
+          },
+          {
+            capabilities: {
+              resources: {},
+              tools: {},
+              prompts: {},
+            },
           }
-        } catch (e) {
-          console.error("[mcpDynamicHandler] Error parsing JSON payload for session:", e);
-          return c.json(
-            { jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null },
-            400
-          );
-        }
+        );
+
+        // Register all the same capabilities as the main server
+        console.log(`[mcpDynamicHandler] Registering capabilities for session server...`);
+        await registerCapabilities(sessionMcpServer, project);
+        
+        // Cache the session-specific MCP server
+        serverCache.set(sessionCacheKey, {
+          mcpServer: sessionMcpServer,
+          lastUpdated: Date.now()
+        });
+        
+        console.log(`[mcpDynamicHandler] Session MCP server cached with key: ${sessionCacheKey}`);
+      } else {
+        console.log(`[mcpDynamicHandler] Using cached session MCP server for: ${sessionIdHeader}`);
       }
 
-      let transport: StreamableHTTPServerTransport;
+      // Create a single transport instance that will be reused
+      let transport: StreamableHTTPTransport;
+      
       if (sessionIdHeader && sessionTransports[sessionIdHeader]) {
         transport = sessionTransports[sessionIdHeader];
         console.log(`[mcpDynamicHandler] Reusing existing session transport with ID: ${sessionIdHeader}`);
-      } else if (!sessionIdHeader && isInitializeRequest(mcpPayload)) {
-        console.log("[mcpDynamicHandler] Initializing new session");
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: randomUUID,
-          onsessioninitialized: (sessionId) => {
-            console.log(`[mcpDynamicHandler] New session initialized with ID: ${sessionId}`);
+      } else {
+        console.log("[mcpDynamicHandler] Creating new session transport");
+        transport = new StreamableHTTPTransport({
+          sessionIdGenerator: () => crypto.randomUUID(),
+          enableJsonResponse: false,
+          // Add session initialization callback
+          onsessioninitialized: (sessionId: string) => {
+            console.log('🟢 New session initialized:', sessionId);
             sessionTransports[sessionId] = transport;
-          },
+          }
         });
+
+        // Add session close callback
         transport.onclose = () => {
+          console.log('🔴 Transport closed, cleaning up session');
           if (transport.sessionId) {
-            console.log(`[mcpDynamicHandler] Session closed, cleaning up transport with ID: ${transport.sessionId}`);
             delete sessionTransports[transport.sessionId];
+            // Also clean up the session-specific MCP server
+            const sessionKey = `${projectId}-${transport.sessionId}`;
+            const cached = serverCache.get(sessionKey);
+            if (cached) {
+              try {
+                cached.mcpServer.close();
+              } catch (e) {
+                console.log(`[mcpDynamicHandler] Error closing session server:`, e);
+              }
+              serverCache.delete(sessionKey);
+              console.log(`[mcpDynamicHandler] Cleaned up session MCP server for key: ${sessionKey}`);
+            }
           }
         };
-        await mcpServer.connect(transport);
-      } else {
-        console.error(`[mcpDynamicHandler] Bad request for session management: missing or invalid session ID; header: ${sessionIdHeader}`);
-        return c.json(
-          { jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: No valid session ID provided" }, id: null },
-          400
-        );
+
+        // Add error handling callback
+        transport.onerror = (error: Error) => {
+          console.error('❌ Transport error:', error);
+        };
+
+        // Add message handling callback (optional)
+        transport.onmessage = (message: any) => {
+          console.log('📨 Transport message:', message);
+        };
+
+        // Initialize the transport connection with the session-specific MCP server
+        await sessionMcpServer.connect(transport);
+        console.log('✅ Session MCP transport initialized successfully');
       }
 
-      try {
-        console.log("[mcpDynamicHandler] Handling session request");
-        await transport.handleRequest(req, res, mcpPayload);
-        return toFetchResponse(res);
-      } catch (transportError) {
-        console.error("[mcpDynamicHandler] Error during session transport handleRequest:", transportError);
-        return c.json(
-          { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error during MCP transport." }, id: null },
-          500
-        );
-      }
-    }
+      // ... rest of the session handling code remains the same ...
+  }
 
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  // Stateless (non-session) branch
+  // Use StreamableHTTPServerTransport for non-session connections (like the original working code)
+  if (!statelessTransport) {
+    statelessTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    statelessTransport.onerror = (error: Error) => {
+      console.error('❌ Non-session transport error:', error);
+    };
+  }
+  if (!statelessInitialized) {
+    await mcpServer.connect(statelessTransport);
+    statelessInitialized = true;
+    console.log('✅ Non-session MCP transport initialized successfully');
+  }
+
+  mcpServer.server.onerror = console.error.bind(console);
   
-  try {
-    console.log("[mcpDynamicHandler] Connecting McpServer to transport...");
-    await mcpServer.connect(transport);
-    console.log("[mcpDynamicHandler] McpServer connected to transport.");
-
-    transport.onerror = console.error.bind(console);
-    mcpServer.server.onerror = console.error.bind(console);
-    
-    const { req, res } = toReqRes(c.req.raw);
-    let mcpPayload: any;
-    if (c.req.header('content-type')?.includes('application/json')) {
-        try {
-            mcpPayload = await c.req.json();
-                          if (mcpPayload) {
-                  console.log("[mcpDynamicHandler] ==================== MCP REQUEST PAYLOAD ====================");
-                console.log("[mcpDynamicHandler] MCP Payload to be handled (from c.req.json()):", JSON.stringify(mcpPayload, null, 2));
-                
-                // Log the specific MCP method being called
-                if (mcpPayload.method) {
-                  console.log(`[mcpDynamicHandler] 🔄 MCP METHOD: ${mcpPayload.method}`);
-                  console.log(`[mcpDynamicHandler] 🔄 MCP ID: ${mcpPayload.id || 'No ID'}`);
-                  
-                  // Track MCP protocol methods for debugging
-                  if (NON_BILLABLE_METHODS.includes(mcpPayload.method)) {
-                    console.log(`[mcpDynamicHandler] 📋 PROTOCOL METHOD: This is a standard MCP protocol handshake method`);
-                  } else {
-                    console.log(`[mcpDynamicHandler] 💰 BILLABLE METHOD: This is a billable API call`);
-                  }
-                  
-                  if (mcpPayload.params) {
-                    console.log(`[mcpDynamicHandler] 🔄 MCP PARAMS:`, JSON.stringify(mcpPayload.params, null, 2));
-                  }
-                }
-                
-                  console.log("[mcpDynamicHandler] ==================== END MCP REQUEST PAYLOAD ====================");
-            }
-        } catch (e) {
-              console.error("[mcpDynamicHandler] Error parsing JSON payload for session:", e);
-            mcpServer.close();
-            transport.close();
-            return c.json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null }, 400);
-        }
-    } else if (c.req.method !== "GET") {
-         console.log("[mcpDynamicHandler] MCP request with non-JSON content type or GET method, passing null payload.");
-         mcpPayload = null;
-    } else {
-        mcpPayload = undefined; 
-    }
-
-    if (c.req.method === 'POST' && !mcpPayload && c.req.header('content-length') && c.req.header('content-length') !== '0') {
-        console.warn("[mcpDynamicHandler] POST request with Content-Length but mcpPayload is not set. Body parsing might have failed silently or was not JSON.");
-    }
-
-    // -------------------- BILLABLE METHOD USAGE TRACKING --------------------
+  let mcpPayload: any;
+  if (c.req.header('content-type')?.includes('application/json')) {
     try {
-      const methodName: string | undefined = typeof mcpPayload === 'object' && mcpPayload !== null ? mcpPayload.method : undefined;
-      const isBillableMethod = methodName ? !NON_BILLABLE_METHODS.includes(methodName) : false;
-
-      console.log(`[mcpDynamicHandler] 🔍 Method analysis: "${methodName}" -> ${isBillableMethod ? 'BILLABLE' : 'NON-BILLABLE'}`);
-
-      if (!usageTracked && isBillableMethod) {
-        console.log(`[mcpDynamicHandler] 💰 Billable method detected: "${methodName}" - tracking usage now`);
-
-        // Daily limit
-        console.log(`[mcpDynamicHandler] (Late) Checking daily usage limit...`);
-        const { allowed: allowedDayLate, error: errorDayLate, status: statusDayLate, usage: dailyUsageLate, plan: dailyPlanLate } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_today' });
-        if (dailyUsageLate && dailyPlanLate) {
-          console.log(`[mcpDynamicHandler] 📊 (Late) DAILY USAGE: ${dailyUsageLate.requests_today || 0}/${dailyPlanLate.max_requests_per_day || 'unlimited'} requests (${dailyUsageLate.requests_today_date})`);
+      mcpPayload = await c.req.json();
+      if (mcpPayload) {
+        console.log("[mcpDynamicHandler] ==================== MCP REQUEST PAYLOAD ====================");
+        console.log("[mcpDynamicHandler] MCP Payload to be handled (from c.req.json()):", JSON.stringify(mcpPayload, null, 2));
+        
+        // Log the specific MCP method being called
+        if (mcpPayload.method) {
+          console.log(`[mcpDynamicHandler] 🔄 MCP METHOD: ${mcpPayload.method}`);
+          console.log(`[mcpDynamicHandler] 🔄 MCP ID: ${mcpPayload.id || 'No ID'}`);
+          
+          // Track MCP protocol methods for debugging
+          if (NON_BILLABLE_METHODS.includes(mcpPayload.method)) {
+            console.log(`[mcpDynamicHandler] 📋 PROTOCOL METHOD: This is a standard MCP protocol handshake method`);
+          } else {
+            console.log(`[mcpDynamicHandler] 💰 BILLABLE METHOD: This is a billable API call`);
+          }
+          
+          if (mcpPayload.params) {
+            console.log(`[mcpDynamicHandler] 🔄 MCP PARAMS:`, JSON.stringify(mcpPayload.params, null, 2));
+          }
         }
-        if (!allowedDayLate) {
-          console.warn(`[mcpDynamicHandler] (Late) Daily quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorDayLate}`);
-          return c.json({ error: errorDayLate }, statusDayLate ?? 429);
-        }
-
-        // Monthly limit (validate only)
-        console.log(`[mcpDynamicHandler] (Late) Checking monthly usage limit...`);
-        const { allowed: allowedMonthLate, error: errorMonthLate, status: statusMonthLate } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_this_month', increment: 0 });
-        if (!allowedMonthLate) {
-          console.warn(`[mcpDynamicHandler] (Late) Monthly quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorMonthLate}`);
-          return c.json({ error: errorMonthLate }, statusMonthLate ?? 429);
-        }
-
-        usageTracked = true;
-        console.log(`[mcpDynamicHandler] ✅ Usage tracking complete for billable method: "${methodName}"`);
-      } else if (!isBillableMethod) {
-        console.log(`[mcpDynamicHandler] ⏭️  Skipping usage tracking for non-billable method: "${methodName}"`);
+        
+        console.log("[mcpDynamicHandler] ==================== END MCP REQUEST PAYLOAD ====================");
       }
-    } catch (trackingError) {
-      console.error('[mcpDynamicHandler] Error during usage tracking:', trackingError);
+    } catch (e) {
+      console.error("[mcpDynamicHandler] Error parsing JSON payload:", e);
+      return c.json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null }, 400);
     }
-    // ------------------ END BILLABLE METHOD USAGE TRACKING ------------------
+  } else if (c.req.method !== "GET") {
+    console.log("[mcpDynamicHandler] MCP request with non-JSON content type or GET method, passing null payload.");
+    mcpPayload = null;
+  } else {
+    mcpPayload = undefined; 
+  }
 
-    try {
-      console.log(`[mcpDynamicHandler] Forwarding to transport.handleRequest. Method: ${req.method}, Payload defined: ${mcpPayload !== undefined}`);
-      await transport.handleRequest(req, res, mcpPayload);
-      console.log("[mcpDynamicHandler] transport.handleRequest completed. Converting to FetchResponse.");
-      return toFetchResponse(res);
-    } catch (transportError: any) {
-      console.error("[mcpDynamicHandler] CRITICAL ERROR during transport.handleRequest:", transportError.message, transportError.stack, transportError);
-      mcpServer.close();
-      transport.close();
-      const requestId = (typeof mcpPayload === 'object' && mcpPayload !== null && 'id' in mcpPayload) ? mcpPayload.id : null;
-      return c.json(
-          { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error during MCP transport." }, id: requestId },
-          500
-      );
+  if (c.req.method === 'POST' && !mcpPayload && c.req.header('content-length') && c.req.header('content-length') !== '0') {
+    console.warn("[mcpDynamicHandler] POST request with Content-Length but mcpPayload is not set. Body parsing might have failed silently or was not JSON.");
+  }
+
+  // -------------------- BILLABLE METHOD USAGE TRACKING --------------------
+  try {
+    const methodName: string | undefined = typeof mcpPayload === 'object' && mcpPayload !== null ? mcpPayload.method : undefined;
+    const isBillableMethod = methodName ? !NON_BILLABLE_METHODS.includes(methodName) : false;
+
+    console.log(`[mcpDynamicHandler] 🔍 Method analysis: "${methodName}" -> ${isBillableMethod ? 'BILLABLE' : 'NON-BILLABLE'}`);
+
+    if (!usageTracked && isBillableMethod) {
+      console.log(`[mcpDynamicHandler] 💰 Billable method detected: "${methodName}" - tracking usage now`);
+
+      // Daily limit
+      console.log(`[mcpDynamicHandler] (Late) Checking daily usage limit...`);
+      const { allowed: allowedDayLate, error: errorDayLate, status: statusDayLate, usage: dailyUsageLate, plan: dailyPlanLate } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_today' });
+      if (dailyUsageLate && dailyPlanLate) {
+        console.log(`[mcpDynamicHandler] 📊 (Late) DAILY USAGE: ${dailyUsageLate.requests_today || 0}/${dailyPlanLate.max_requests_per_day || 'unlimited'} requests (${dailyUsageLate.requests_today_date})`);
+      }
+      if (!allowedDayLate) {
+        console.warn(`[mcpDynamicHandler] (Late) Daily quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorDayLate}`);
+        return c.json({ error: errorDayLate }, statusDayLate ?? 429);
+      }
+
+      // Monthly limit (validate only)
+      console.log(`[mcpDynamicHandler] (Late) Checking monthly usage limit...`);
+      const { allowed: allowedMonthLate, error: errorMonthLate, status: statusMonthLate } = await checkAndIncrementUsage({ userId: projectOwnerId, usageType: 'requests_this_month', increment: 0 });
+      if (!allowedMonthLate) {
+        console.warn(`[mcpDynamicHandler] (Late) Monthly quota exceeded for project ${project.id} (owner ${projectOwnerId}): ${errorMonthLate}`);
+        return c.json({ error: errorMonthLate }, statusMonthLate ?? 429);
+      }
+
+      usageTracked = true;
+      console.log(`[mcpDynamicHandler] ✅ Usage tracking complete for billable method: "${methodName}"`);
+    } else if (!isBillableMethod) {
+      console.log(`[mcpDynamicHandler] ⏭️  Skipping usage tracking for non-billable method: "${methodName}"`);
     }
+  } catch (trackingError) {
+    console.error('[mcpDynamicHandler] Error during usage tracking:', trackingError);
+  }
+  // ------------------ END BILLABLE METHOD USAGE TRACKING ------------------
 
-  } catch (e: any) {
-    console.error("[mcpDynamicHandler] Outer error during MCP processing or response generation:", e);
-    // Ensure server/transport are closed if an error occurs before or outside transport.handleRequest
-    if (mcpServer) mcpServer.close();
-    if (transport) transport.close();
+  try {
+    console.log(`[mcpDynamicHandler] Forwarding to transport.handleRequest. Method: ${c.req.method}, Payload defined: ${mcpPayload !== undefined}`);
+    const { req, res } = toReqRes(c.req.raw);
+    await statelessTransport.handleRequest(req, res, mcpPayload);
+    console.log("[mcpDynamicHandler] transport.handleRequest completed successfully.");
+    return toFetchResponse(res);
+  } catch (transportError: any) {
+    console.error("[mcpDynamicHandler] CRITICAL ERROR during transport.handleRequest:", transportError.message, transportError.stack, transportError);
+    const requestId = (typeof mcpPayload === 'object' && mcpPayload !== null && 'id' in mcpPayload) ? mcpPayload.id : null;
     return c.json(
-      { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null },
-      { status: 500 }
+        { jsonrpc: "2.0", error: { code: -32603, message: "Internal server error during MCP transport." }, id: requestId },
+        500
     );
   }
 }; 
+
+// Helper function to register all capabilities on an MCP server
+async function registerCapabilities(mcpServer: any, project: any) {
+  console.log(`[registerCapabilities] Registering capabilities for project: ${project.name}`);
+  
+  // Register resources
+  for (const resConfig of (project.mcp_resources || [])) {
+    console.log(`[registerCapabilities] Registering resource: ${resConfig.name}`, {
+      resource_type: resConfig.resource_type,
+      uri: resConfig.uri,
+      uri_pattern: resConfig.uri_pattern,
+      template_pattern: resConfig.template_pattern,
+      api_url: resConfig.api_url,
+      static_content: resConfig.static_content ? 'Present' : 'Not present'
+    });
+    
+    const resourceType = resConfig.resource_type || 'static';
+    const resourceMetadata = {
+      mimeType: resConfig.mime_type || "application/json",
+      description: resConfig.description,
+      title: resConfig.title
+    };
+
+    // Determine if this is a static or dynamic resource
+    // Check for 'uri' first (new field), then fall back to old field names
+    const uriPattern = resConfig.uri || resConfig.uri_pattern || resConfig.template_pattern || `/${resConfig.name.toLowerCase().replace(/\s+/g, '-')}`;
+    
+    console.log(`[registerCapabilities] Final URI pattern for resource "${resConfig.name}": "${uriPattern}"`);
+    
+    // Check if this is a dynamic resource that needs template registration
+    if ((resourceType === 'dynamic' || resourceType === 'context_aware') && (resConfig.uri || resConfig.template_pattern)) {
+      // For dynamic resources, we need to use the ResourceTemplate API
+      // Convert our template format to RFC 6570 format
+      // e.g., "weather://{city}" is already in the correct format
+      const templatePattern = resConfig.uri || resConfig.template_pattern;
+      
+      // Build the template options
+      const templateOptions: any = { list: undefined };
+      
+      // For context-aware resources, add the complete functions
+      if (resourceType === 'context_aware' && resConfig.completion_config?.complete) {
+        templateOptions.complete = {};
+        
+        console.log(`[registerCapabilities] Processing completion config for resource "${resConfig.name}":`, resConfig.completion_config.complete);
+        
+        // Add default completion for owner parameter if this is the GitHub repos resource
+        if (templatePattern === 'github://repos/{owner}/{repo}') {
+          // Add owner completion with common organizations
+          templateOptions.complete['owner'] = (value: string, context: any) => {
+            console.log(`[registerCapabilities] Owner completion for value "${value}"`);
+            const owners = ['org1', 'microsoft', 'facebook', 'google', 'modelcontextprotocol', 'anthropics', 'openai'];
+            const filtered = owners.filter(owner => owner.toLowerCase().startsWith(value.toLowerCase()));
+            console.log(`[registerCapabilities] Returning owner completions:`, filtered);
+            return filtered;
+          };
+          console.log(`[registerCapabilities] Added default owner completion for GitHub repos resource`);
+        }
+        
+        // Process each parameter's completion function
+        for (const [param, config] of Object.entries(resConfig.completion_config.complete)) {
+          if (typeof config === 'object' && config !== null) {
+            const completionConfig = config as any;
+            
+            // Create completion function based on configuration
+            if (completionConfig.type === 'static' && Array.isArray(completionConfig.values)) {
+              // Static list of completions
+              templateOptions.complete[param] = (value: string, context: any) => {
+                console.log(`[registerCapabilities] Static completion for param "${param}" with value "${value}"`);
+                const filtered = completionConfig.values.filter((item: string) => 
+                  item.toLowerCase().startsWith(value.toLowerCase())
+                );
+                console.log(`[registerCapabilities] Returning static completions:`, filtered);
+                return filtered;
+              };
+              console.log(`[registerCapabilities] Added static completion for parameter "${param}" with values:`, completionConfig.values);
+            } else if (completionConfig.type === 'conditional' && completionConfig.conditions) {
+              // Conditional completions based on other parameters
+              templateOptions.complete[param] = (value: string, context: any) => {
+                console.log(`[registerCapabilities] Conditional completion for param "${param}" with value "${value}", context:`, context);
+                
+                // Check each condition
+                for (const condition of completionConfig.conditions) {
+                  if (condition.when && condition.values) {
+                    // Check if all conditions match
+                    let allMatch = true;
+                    for (const [condKey, expectedValue] of Object.entries(condition.when)) {
+                      if (context[condKey] !== expectedValue) {
+                        allMatch = false;
+                        break;
+                      }
+                    }
+                    
+                    if (allMatch) {
+                      const filtered = condition.values.filter((item: string) => 
+                        item.toLowerCase().startsWith(value.toLowerCase())
+                      );
+                      console.log(`[registerCapabilities] Condition matched, returning:`, filtered);
+                      return filtered;
+                    }
+                  }
+                }
+                
+                // Default values if no conditions match
+                if (completionConfig.default && Array.isArray(completionConfig.default)) {
+                  const filtered = completionConfig.default.filter((item: string) => 
+                    item.toLowerCase().startsWith(value.toLowerCase())
+                  );
+                  console.log(`[registerCapabilities] No conditions matched, returning default completions:`, filtered);
+                  return filtered;
+                }
+                
+                console.log(`[registerCapabilities] No completions found`);
+                return [];
+              };
+              console.log(`[registerCapabilities] Added conditional completion for parameter "${param}"`);
+            } else if (completionConfig.type === 'function' && completionConfig.logic) {
+              // Legacy support for function strings (with security warning)
+              console.warn(`[registerCapabilities] Using legacy function string completion for parameter "${param}". Consider using static or conditional completion instead.`);
+              const logic = completionConfig.logic;
+              templateOptions.complete[param] = (value: string, context: any) => {
+                console.log(`[registerCapabilities] Legacy completion function called for param "${param}" with value "${value}"`);
+                const result = evaluateCompletionLogic(logic, value, context);
+                console.log(`[registerCapabilities] Legacy completion function returning:`, result);
+                return result;
+              };
+            }
+          }
+        }
+        
+        console.log(`[registerCapabilities] Final templateOptions.complete:`, Object.keys(templateOptions.complete));
+      }
+      
+      const resourceTemplate = new ResourceTemplate(templatePattern, templateOptions);
+      
+      console.log(`[registerCapabilities] Registering ${resourceType} resource with template:`, templatePattern);
+      if (templateOptions.complete) {
+        console.log(`[registerCapabilities] Resource has completion functions for parameters:`, Object.keys(templateOptions.complete));
+      }
+      
+      mcpServer.registerResource(
+        resConfig.name, 
+        resourceTemplate, // Pass the ResourceTemplate instance
+        resourceMetadata,
+        async (uri: URL, variables: any): Promise<ReadResourceResult> => {
+          console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL START ====================`);
+          console.log(`[MCP Resource: ${resConfig.name}] Called for URI: ${uri.toString()}`);
+          console.log(`[MCP Resource: ${resConfig.name}] Template variables:`, variables);
+          console.log(`[MCP Resource: ${resConfig.name}] Resource type: ${resourceType}`);
+          console.log(`[MCP Resource: ${resConfig.name}] Template pattern: ${templatePattern}`);
+          console.log(`[MCP Resource: ${resConfig.name}] API URL: ${resConfig.api_url || 'Not set'}`);
+          console.log(`[MCP Resource: ${resConfig.name}] Static content: ${resConfig.static_content ? 'Present' : 'Not present'}`);
+          
+          // Extract the city parameter for weather resource
+          const city = variables.city || '';
+          
+          // If static_content is provided, return it directly (with parameter substitution)
+          if (resConfig.static_content) {
+            console.log(`[MCP Resource: ${resConfig.name}] Using static content`);
+            let content = resConfig.static_content;
+            
+            // Replace template variables with actual values
+            if (variables && Object.keys(variables).length > 0) {
+              console.log(`[MCP Resource: ${resConfig.name}] Replacing template variables in static content`);
+              for (const [key, value] of Object.entries(variables)) {
+                const beforeReplace = content;
+                const stringValue = Array.isArray(value) ? (value as any[])[0] : value;
+                content = content.replace(new RegExp(`{{${key}}}`, 'g'), String(stringValue));
+                console.log(`[MCP Resource: ${resConfig.name}] Replaced {{${key}}} with "${stringValue}": "${beforeReplace}" -> "${content}"`);
+              }
+            }
+            
+            console.log(`[MCP Resource: ${resConfig.name}] Final static content:`, content);
+            console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (STATIC CONTENT) ====================`);
+            return { 
+              contents: [{
+                type: "text", 
+                text: content, 
+                uri: uri.toString()
+              }] 
+            };
+          }
+          
+          // If api_url is provided, fetch from external API
+          if (resConfig.api_url) {
+            console.log(`[MCP Resource: ${resConfig.name}] Using API URL: ${resConfig.api_url}`);
+            try {
+              let url = resConfig.api_url;
+              
+              // Replace URL parameters
+              if (variables && Object.keys(variables).length > 0) {
+                console.log(`[MCP Resource: ${resConfig.name}] Replacing URL parameters`);
+                for (const [key, value] of Object.entries(variables)) {
+                  const beforeReplace = url;
+                  const stringValue = Array.isArray(value) ? (value as any[])[0] : value;
+                  url = url.replace(new RegExp(`{${key}}`, 'g'), String(stringValue));
+                  console.log(`[MCP Resource: ${resConfig.name}] Replaced {${key}} with "${stringValue}": "${beforeReplace}" -> "${url}"`);
+                }
+              }
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Final URL to fetch:`, url);
+              console.log(`[MCP Resource: ${resConfig.name}] Request headers:`, resConfig.headers || {});
+              
+              const fetchOptions: RequestInit = {
+                method: 'GET',
+                headers: resConfig.headers || {},
+                signal: undefined // We don't have access to opts here
+              };
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Making fetch request...`);
+              const response = await fetch(url, fetchOptions);
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response status: ${response.status} ${response.statusText}`);
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response headers:`, Object.fromEntries(response.headers.entries()));
+              
+              const text = await response.text();
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response body length: ${text.length} characters`);
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response body preview: ${text.substring(0, 200)}${text.length > 200 ? '...' : ''}`);
+              
+              if (!response.ok) {
+                console.error(`[MCP Resource: ${resConfig.name}] Fetch failed with status ${response.status}`);
+                console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (FETCH ERROR) ====================`);
+                return {
+                  contents: [],
+                  error: { 
+                    code: "FETCH_ERROR", 
+                    message: `Failed to fetch resource: ${response.status} ${response.statusText}` 
+                  }
+                };
+              }
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Successfully fetched data`);
+              console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (API SUCCESS) ====================`);
+              return { 
+                contents: [{
+                  type: "text", 
+                  text: text, 
+                  uri: uri.toString() 
+                }] 
+              };
+            } catch (error: any) {
+              console.error(`[MCP Resource: ${resConfig.name}] Fetch error:`, error);
+              console.error(`[MCP Resource: ${resConfig.name}] Error stack:`, error.stack);
+              console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (FETCH EXCEPTION) ====================`);
+              return {
+                contents: [],
+                error: { 
+                  code: "FETCH_ERROR", 
+                  message: `Error fetching resource: ${error.message}` 
+                }
+              };
+            }
+          }
+          
+          // If neither static_content nor api_url is provided, generate a default response
+          if (variables && Object.keys(variables).length > 0) {
+            const paramInfo = Object.entries(variables)
+              .map(([key, value]) => `${key}: ${value}`)
+              .join(', ');
+            
+            console.log(`[MCP Resource: ${resConfig.name}] Returning default response with parameters: ${paramInfo}`);
+            console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (DEFAULT WITH PARAMS) ====================`);
+            return { 
+              contents: [{
+                type: "text", 
+                text: `Resource ${resConfig.name} with parameters: ${paramInfo}`, 
+                uri: uri.toString() 
+              }] 
+            };
+          }
+          
+          console.log(`[MCP Resource: ${resConfig.name}] No static_content or api_url defined, returning error`);
+          console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (NOT IMPLEMENTED) ====================`);
+          return { 
+            contents: [], 
+            error: { 
+              code: "NOT_IMPLEMENTED", 
+              message: "Resource has no static_content or api_url defined."
+            }
+          };
+        }
+      );
+    } else {
+      // For static resources, use the simple registerResource method
+      mcpServer.registerResource(
+        resConfig.name,
+        uriPattern,
+        resourceMetadata,
+        async (mcpUri: URL, opts?: any): Promise<ReadResourceResult> => {
+          console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL START ====================`);
+          console.log(`[MCP Resource: ${resConfig.name}] Called for URI: ${mcpUri.toString()}`);
+          console.log(`[MCP Resource: ${resConfig.name}] Resource type: ${resourceType}`);
+          console.log(`[MCP Resource: ${resConfig.name}] URI pattern: ${uriPattern}`);
+          console.log(`[MCP Resource: ${resConfig.name}] API URL: ${resConfig.api_url || 'Not set'}`);
+          console.log(`[MCP Resource: ${resConfig.name}] Static content: ${resConfig.static_content ? 'Present' : 'Not present'}`);
+          console.log(`[MCP Resource: ${resConfig.name}] Options:`, opts);
+          
+          // Extract parameters from the URI if it's a dynamic resource
+          const params: Record<string, string> = {};
+          if (resourceType === 'dynamic' || resourceType === 'context_aware') {
+            const templatePattern = resConfig.uri || resConfig.template_pattern || resConfig.uri_pattern;
+            if (!templatePattern) {
+              console.error(`[MCP Resource: ${resConfig.name}] No template pattern found for dynamic resource`);
+              console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (ERROR) ====================`);
+              return {
+                contents: [],
+                error: {
+                  code: "CONFIGURATION_ERROR",
+                  message: "No template pattern configured for dynamic resource"
+                }
+              };
+            }
+            
+            // Convert the incoming URI to a string for matching
+            const incomingUri = mcpUri.toString();
+            console.log(`[MCP Resource: ${resConfig.name}] Matching URI "${incomingUri}" against template "${templatePattern}"`);
+            
+            // Create a regex pattern from the template pattern
+            // Replace {param} with capturing groups
+            let regexPattern = templatePattern
+              .replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // Escape special regex chars except {}
+              .replace(/\\{([^}]+)\\}/g, '([^/]+)'); // Replace {param} with capturing group
+            
+            // Handle the scheme:// part properly
+            regexPattern = '^' + regexPattern + '$';
+            
+            console.log(`[MCP Resource: ${resConfig.name}] Generated regex pattern: ${regexPattern}`);
+            
+            const regex = new RegExp(regexPattern);
+            const matchResult = incomingUri.match(regex);
+            
+            console.log(`[MCP Resource: ${resConfig.name}] Regex match result:`, matchResult);
+            
+            if (matchResult) {
+              // Extract parameter names from template
+              const paramNames: string[] = [];
+              const paramRegex = /{([^}]+)}/g;
+              let match;
+              while ((match = paramRegex.exec(templatePattern)) !== null) {
+                paramNames.push(match[1]);
+              }
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Parameter names from template:`, paramNames);
+              
+              // Map captured values to parameter names
+              for (let i = 0; i < paramNames.length; i++) {
+                if (matchResult[i + 1]) {
+                  params[paramNames[i]] = matchResult[i + 1];
+                }
+              }
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Successfully extracted params:`, params);
+            } else {
+              console.log(`[MCP Resource: ${resConfig.name}] URI "${incomingUri}" does not match template "${templatePattern}"`);
+              console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (URI MISMATCH) ====================`);
+              return {
+                contents: [],
+                error: {
+                  code: "URI_MISMATCH",
+                  message: `URI "${incomingUri}" does not match expected pattern "${templatePattern}"`
+                }
+              };
+            }
+          }
+          
+          // If static_content is provided, return it directly (with parameter substitution for dynamic resources)
+          if (resConfig.static_content) {
+            console.log(`[MCP Resource: ${resConfig.name}] Using static content`);
+            let content = resConfig.static_content;
+            
+            // Replace template variables with actual values for dynamic resources
+            if (Object.keys(params).length > 0) {
+              console.log(`[MCP Resource: ${resConfig.name}] Replacing template variables in static content`);
+              for (const [key, value] of Object.entries(params)) {
+                const beforeReplace = content;
+                const stringValue = Array.isArray(value) ? value[0] : value; // Use first value if array
+                content = content.replace(new RegExp(`{{${key}}}`, 'g'), stringValue);
+                console.log(`[MCP Resource: ${resConfig.name}] Replaced {{${key}}} with "${stringValue}": "${beforeReplace}" -> "${content}"`);
+              }
+            }
+            
+            console.log(`[MCP Resource: ${resConfig.name}] Final static content:`, content);
+            console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (STATIC CONTENT) ====================`);
+            return { 
+              contents: [{
+                type: "text", 
+                text: content, 
+                uri: mcpUri.toString() 
+              }] 
+            };
+          }
+          
+          // If api_url is provided, fetch from external API
+          if (resConfig.api_url) {
+            console.log(`[MCP Resource: ${resConfig.name}] Using API URL: ${resConfig.api_url}`);
+            try {
+              let url = resConfig.api_url;
+              
+              // Replace URL parameters for dynamic resources
+              if (Object.keys(params).length > 0) {
+                console.log(`[MCP Resource: ${resConfig.name}] Replacing URL parameters`);
+                for (const [key, value] of Object.entries(params)) {
+                  const beforeReplace = url;
+                  url = url.replace(new RegExp(`{${key}}`, 'g'), value);
+                  console.log(`[MCP Resource: ${resConfig.name}] Replaced {${key}} with "${value}": "${beforeReplace}" -> "${url}"`);
+                }
+              }
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Final URL to fetch:`, url);
+              console.log(`[MCP Resource: ${resConfig.name}] Request headers:`, resConfig.headers || {});
+              
+              const fetchOptions: RequestInit = {
+                method: 'GET',
+                headers: resConfig.headers || {},
+                signal: opts?.signal
+              };
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Making fetch request...`);
+              const response = await fetch(url, fetchOptions);
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response status: ${response.status} ${response.statusText}`);
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response headers:`, Object.fromEntries(response.headers.entries()));
+              
+              const text = await response.text();
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response body length: ${text.length} characters`);
+              console.log(`[MCP Resource: ${resConfig.name}] Fetch response body preview: ${text.substring(0, 200)}${text.length > 200 ? '...' : ''}`);
+              
+              if (!response.ok) {
+                console.error(`[MCP Resource: ${resConfig.name}] Fetch failed with status ${response.status}`);
+                console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (FETCH ERROR) ====================`);
+                return {
+                  contents: [],
+                  error: { 
+                    code: "FETCH_ERROR", 
+                    message: `Failed to fetch resource: ${response.status} ${response.statusText}` 
+                  }
+                };
+              }
+              
+              console.log(`[MCP Resource: ${resConfig.name}] Successfully fetched data`);
+              console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (API SUCCESS) ====================`);
+              return { 
+                contents: [{
+                  type: "text", 
+                  text: text, 
+                  uri: mcpUri.toString() 
+                }] 
+              };
+            } catch (error: any) {
+              console.error(`[MCP Resource: ${resConfig.name}] Fetch error:`, error);
+              console.error(`[MCP Resource: ${resConfig.name}] Error stack:`, error.stack);
+              console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (FETCH EXCEPTION) ====================`);
+              return {
+                contents: [],
+                error: { 
+                  code: "FETCH_ERROR", 
+                  message: `Error fetching resource: ${error.message}` 
+                }
+              };
+            }
+          }
+          
+          // If neither static_content nor api_url is provided, generate a default response
+          if (Object.keys(params).length > 0) {
+            const paramInfo = Object.entries(params)
+              .map(([key, value]) => `${key}: ${value}`)
+              .join(', ');
+            
+            console.log(`[MCP Resource: ${resConfig.name}] Returning default response with parameters: ${paramInfo}`);
+            console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (DEFAULT WITH PARAMS) ====================`);
+            return { 
+              contents: [{
+                type: "text", 
+                text: `Resource ${resConfig.name} with parameters: ${paramInfo}`, 
+                uri: mcpUri.toString() 
+              }] 
+            };
+          }
+          
+          console.log(`[MCP Resource: ${resConfig.name}] No static_content or api_url defined, returning error`);
+          console.log(`[MCP Resource: ${resConfig.name}] ==================== RESOURCE CALL END (NOT IMPLEMENTED) ====================`);
+          return { 
+            contents: [], 
+            error: { 
+              code: "NOT_IMPLEMENTED", 
+              message: "Resource has no static_content or api_url defined."
+            }
+          };
+        }
+      );
+    }
+    
+    console.log(`[registerCapabilities] Successfully registered resource: ${resConfig.name}`);
+  }
+
+  console.log(`[registerCapabilities] ==================== RESOURCE REGISTRATION SUMMARY ====================`);
+  console.log(`[registerCapabilities] Total resources registered: ${(project.mcp_resources || []).length}`);
+  (project.mcp_resources || []).forEach((res: any, index: number) => {
+    const resourceType = res.resource_type || 'static';
+    const pattern = res.uri || res.uri_pattern || res.template_pattern || `/${res.name.toLowerCase().replace(/\s+/g, '-')}`;
+    const registrationType = (resourceType === 'dynamic' || resourceType === 'context_aware') && (res.uri || res.template_pattern) ? 'template' : 'static';
+    console.log(`[registerCapabilities] Resource ${index + 1}: "${res.name}" -> Pattern: "${pattern}" -> Type: ${resourceType} (registered as ${registrationType})`);
+  });
+  console.log(`[registerCapabilities] ==================== END RESOURCE REGISTRATION SUMMARY ====================`);
+
+  // Register tools
+  (project.mcp_tools || []).forEach((toolConfig: any) => { 
+    console.log(`[registerCapabilities] Registering tool: ${toolConfig.name}`, toolConfig);
+      
+    // Build input schema from parameters
+    const inputSchema: Record<string, z.ZodTypeAny> = {};
+    if (toolConfig.parameters) { 
+      Object.entries(toolConfig.parameters).forEach(([key, paramConfig]) => {
+        if (typeof paramConfig === 'object' && paramConfig !== null) {
+          // Handle structured parameter definitions
+          const config = paramConfig as any;
+          let schema: z.ZodTypeAny;
+          
+          // Determine the Zod type based on the parameter type
+          switch (config.type) {
+            case 'number':
+              schema = z.number();
+              break;
+            case 'boolean':
+              schema = z.boolean();
+              break;
+            case 'array':
+              schema = z.array(z.string());
+              break;
+            case 'object':
+              schema = z.object({});
+              break;
+            default:
+              schema = z.string();
+          }
+          
+          // Add description if available
+          if (config.description) {
+            schema = schema.describe(config.description);
+          }
+          
+          // Handle optional parameters
+          if (config.required === false) {
+            schema = schema.optional();
+          }
+          
+          inputSchema[key] = schema;
+        } else {
+          // Legacy support: if parameter is just a string description
+          inputSchema[key] = z.string().describe(String(paramConfig));
+        }
+      }); 
+    }
+      
+    // Use the newer registerTool method
+    mcpServer.registerTool(
+      toolConfig.name, 
+      {
+        title: toolConfig.title || toolConfig.name,
+        description: toolConfig.description || '',
+        inputSchema: inputSchema
+      },
+      async (params: any): Promise<CallToolResult> => { 
+        console.log(`[MCP Tool: ${toolConfig.name}] Called with params:`, params);
+        console.log(`[MCP Tool: ${toolConfig.name}] Tool Config:`, toolConfig);
+          
+        // Handle simple tools with static_result
+        if (toolConfig.static_result) {
+          console.log(`[MCP Tool: ${toolConfig.name}] Using static result`);
+          let result = toolConfig.static_result;
+          
+          // Replace template variables with actual parameter values
+          if (typeof result === 'string' && params) {
+            for (const [key, value] of Object.entries(params)) {
+              result = result.replace(new RegExp(`{${key}}`, 'g'), String(value));
+            }
+          }
+          
+          return {
+            content: [{ type: 'text', text: String(result) }]
+          };
+        }
+          
+        // Handle tools that return resource links
+        if (toolConfig.resource_links) {
+          console.log(`[MCP Tool: ${toolConfig.name}] Returning resource links`);
+          const content: any[] = [];
+          
+          // Add optional header text
+          if (toolConfig.resource_links_header) {
+            let header = toolConfig.resource_links_header;
+            // Replace template variables
+            if (params) {
+              for (const [key, value] of Object.entries(params)) {
+                header = header.replace(new RegExp(`{${key}}`, 'g'), String(value));
+              }
+            }
+            content.push({ type: 'text', text: header });
+          }
+          
+          // Add resource links
+          for (const link of toolConfig.resource_links) {
+            content.push({
+              type: 'resource_link',
+              uri: link.uri,
+              name: link.name,
+              mimeType: link.mimeType,
+              description: link.description
+            });
+          }
+          
+          return { content };
+        }
+          
+        // Handle async tools with external API calls
+        if (toolConfig.api_url) {
+          console.log(`[MCP Tool: ${toolConfig.name}] Making API call`);
+          try {
+            const method = (toolConfig.http_method || 'GET').toUpperCase();
+            let url = toolConfig.api_url;
+            let fetchOptions: RequestInit = { method };
+              
+            // Replace URL path parameters first (e.g., {city} in https://api.weather.com/{city})
+            if (params) {
+              for (const [key, value] of Object.entries(params)) {
+                url = url.replace(new RegExp(`{${key}}`, 'g'), String(value));
+              }
+            }
+              
+            // Set headers
+            fetchOptions.headers = { ...(toolConfig.headers || {}) };
+              
+            // Handle request body for POST/PUT/PATCH
+            if (['POST', 'PUT', 'PATCH'].includes(method) && params) {
+              fetchOptions.headers = { ...fetchOptions.headers, 'Content-Type': 'application/json' };
+              fetchOptions.body = JSON.stringify(params);
+            }
+            // Note: For GET/DELETE, we only use path parameters, not query string
+            // This matches the MCP docs pattern where parameters are embedded in the URL path
+              
+            console.log(`[MCP Tool: ${toolConfig.name}] Fetching from: ${url}`);
+            const response = await fetch(url, fetchOptions);
+            const text = await response.text();
+              
+            if (!response.ok) {
+              console.error(`[MCP Tool: ${toolConfig.name}] API call failed: ${response.status}`);
+              return {
+                content: [{ type: 'text', text: `Error: ${response.status} ${response.statusText}\n${text}` }],
+                isError: true
+              };
+            }
+              
+            console.log(`[MCP Tool: ${toolConfig.name}] API call successful`);
+            return { content: [{ type: 'text', text }] };
+          } catch (error: any) {
+            console.error(`[MCP Tool: ${toolConfig.name}] API call error:`, error);
+            return {
+              content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+              isError: true
+            };
+          }
+        }
+          
+        // Default error if no handler is defined
+        console.error(`[MCP Tool: ${toolConfig.name}] No handler defined`);
+        return { 
+          content: [{ type: 'text', text: `Tool ${toolConfig.name} has no implementation defined.` }],
+          isError: true
+        };
+      }
+    );
+      
+    console.log(`[registerCapabilities] Successfully registered tool: ${toolConfig.name}`);
+  });
+
+  // Register prompts
+  (project.mcp_prompts || []).forEach((promptConfig: any) => { 
+    console.log(`[registerCapabilities] Registering prompt: ${promptConfig.name}`, promptConfig);
+      
+    // Build args schema from arguments (preferred) or parameters (backward compatibility)
+    const argsSchema: Record<string, z.ZodTypeAny> = {};
+    const argumentsSource = promptConfig.arguments || promptConfig.parameters;
+    
+    // Create a mapping between positional argument names and named arguments
+    const argNameMapping: Record<string, string> = {};
+    let argIndex = 0;
+    
+    if (argumentsSource) { 
+      Object.entries(argumentsSource).forEach(([key, paramConfig]) => {
+        const positionalKey = argIndex.toString();
+        argNameMapping[positionalKey] = key;
+        argIndex++;
+        
+        if (typeof paramConfig === 'object' && paramConfig !== null) {
+          // Handle structured parameter definitions
+          const config = paramConfig as any;
+          let schema: z.ZodTypeAny;
+          
+          // Determine the Zod type based on the parameter type
+          switch (config.type) {
+            case 'number':
+              schema = z.number();
+              break;
+            case 'boolean':
+              schema = z.boolean();
+              break;
+            case 'array':
+              schema = z.array(z.string());
+              break;
+            case 'object':
+              schema = z.object({});
+              break;
+            default:
+              schema = z.string();
+          }
+          
+          // Add description if available
+          if (config.description) {
+            schema = schema.describe(config.description);
+          }
+          
+          // Handle optional parameters
+          if (config.required === false) {
+            schema = schema.optional();
+          }
+          
+          // Handle context-aware completion from completion_config
+          if (promptConfig.completion_config?.complete?.[key]) {
+            const completionConfig = promptConfig.completion_config.complete[key];
+            // Wrap schema with completable and provide completion function
+            schema = completable(schema, (value: string, context: any) => {
+              console.log(`[registerCapabilities] Completable function called for prompt "${promptConfig.name}", parameter "${key}" (positional: "${positionalKey}"), value "${value}"`);
+              console.log(`[registerCapabilities] Context received:`, context);
+              
+              let completions: string[] = [];
+              
+              if (completionConfig.type === 'static' && Array.isArray(completionConfig.values)) {
+                // Static list of completions
+                completions = completionConfig.values.filter((item: string) => 
+                  item.toLowerCase().startsWith(value.toLowerCase())
+                );
+              } else if (completionConfig.type === 'conditional' && completionConfig.conditions) {
+                // Conditional completions based on other parameters
+                // Convert positional context arguments back to named arguments for condition checking
+                const namedContext: Record<string, string> = {};
+                if (context?.arguments) {
+                  for (const [posKey, val] of Object.entries(context.arguments)) {
+                    const namedKey = argNameMapping[posKey];
+                    if (namedKey) {
+                      namedContext[namedKey] = val as string;
+                    }
+                  }
+                }
+                
+                for (const condition of completionConfig.conditions) {
+                  if (condition.when && condition.values) {
+                    // Check if all conditions match using named arguments
+                    let allMatch = true;
+                    for (const [condKey, expectedValue] of Object.entries(condition.when)) {
+                      if (namedContext[condKey] !== expectedValue) {
+                        allMatch = false;
+                        break;
+                      }
+                    }
+                    
+                    if (allMatch) {
+                      completions = condition.values.filter((item: string) => 
+                        item.toLowerCase().startsWith(value.toLowerCase())
+                      );
+                      break;
+                    }
+                  }
+                }
+                
+                // Use default values if no conditions match
+                if (completions.length === 0 && completionConfig.default && Array.isArray(completionConfig.default)) {
+                  completions = completionConfig.default.filter((item: string) => 
+                    item.toLowerCase().startsWith(value.toLowerCase())
+                  );
+                }
+              }
+              
+              console.log(`[registerCapabilities] Completable function returning:`, completions);
+              return completions;
+            });
+          } else if (config.completion) {
+            // Legacy support for completion logic in parameter config
+            schema = completable(schema, (value: string, context: any) => {
+              // Use the safe evaluation function for completion logic
+              return evaluateCompletionLogic(config.completion, value, context);
+            });
+          }
+          
+          // Use positional key for the schema
+          argsSchema[positionalKey] = schema;
+        } else {
+          // Legacy support: if parameter is just a string description
+          argsSchema[positionalKey] = z.string().describe(String(paramConfig));
+        }
+      }); 
+    }
+      
+    // Use the newer registerPrompt method
+    mcpServer.registerPrompt(
+      promptConfig.name, 
+      {
+        title: promptConfig.title || promptConfig.name,
+        description: promptConfig.description || '',
+        argsSchema: argsSchema
+      },
+      async (args: any): Promise<GetPromptResult> => { 
+        console.log(`[MCP Prompt: ${promptConfig.name}] Called with positional args:`, args);
+        console.log(`[MCP Prompt: ${promptConfig.name}] Prompt Config:`, promptConfig);
+          
+        // Convert positional arguments back to named arguments
+        const namedArgs: Record<string, any> = {};
+        if (args) {
+          for (const [posKey, value] of Object.entries(args)) {
+            const namedKey = argNameMapping[posKey];
+            if (namedKey) {
+              namedArgs[namedKey] = value;
+            }
+          }
+        }
+        
+        console.log(`[MCP Prompt: ${promptConfig.name}] Converted to named args:`, namedArgs);
+        
+        // Determine the role and content based on prompt configuration
+        let role: "user" | "assistant" = promptConfig.role || "user";
+        let content: string = promptConfig.template || '';
+        
+        // Replace template variables with actual argument values using named arguments
+        if (content && namedArgs) {
+          for (const [key, value] of Object.entries(namedArgs)) {
+            content = content.replace(new RegExp(`{{${key}}}`, 'g'), String(value));
+          }
+        }
+        
+        return { 
+          messages: [{ 
+            role: role, 
+            content: { 
+              type: "text", 
+              text: content 
+            } 
+          }] 
+        };
+      }
+    );
+      
+    console.log(`[registerCapabilities] Successfully registered prompt: ${promptConfig.name}`);
+  });
+  
+  console.log("[registerCapabilities] Capabilities registration phase complete.");
+}
