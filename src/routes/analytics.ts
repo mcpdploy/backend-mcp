@@ -1,7 +1,28 @@
 import { Hono } from 'hono';
+import { createClient } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 
 export const analyticsRoutes = new Hono<any>();
+
+// Helper to get an authenticated Supabase client (respects RLS)
+function getAuthenticatedSupabaseClient(c: any) {
+  const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+  const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Supabase URL and anon key must be provided.');
+  }
+  
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    throw new Error('Authorization header required');
+  }
+  
+  const userJwt = authHeader.replace("Bearer ", "");
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: { headers: { Authorization: `Bearer ${userJwt}` } }
+  });
+}
 
 // Get current user's analytics summary
 analyticsRoutes.get('/analytics/summary', async (c) => {
@@ -9,8 +30,11 @@ analyticsRoutes.get('/analytics/summary', async (c) => {
   if (!userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
+    // Use authenticated client for RLS compliance
+    const authenticatedSupabase = getAuthenticatedSupabaseClient(c);
+    
     // Get user analytics summary from the view
-    const { data: summary, error: summaryError } = await supabase
+    const { data: summary, error: summaryError } = await authenticatedSupabase
       .from('user_analytics_summary')
       .select('*')
       .eq('user_id', userId)
@@ -28,7 +52,7 @@ analyticsRoutes.get('/analytics/summary', async (c) => {
     const yearStart = new Date(now.getFullYear(), 0, 1);
 
     // Get today's detailed stats
-    const { data: todayStats } = await supabase
+    const { data: todayStats } = await authenticatedSupabase
       .from('usage_daily_stats')
       .select('*')
       .eq('user_id', userId)
@@ -36,7 +60,7 @@ analyticsRoutes.get('/analytics/summary', async (c) => {
       .single();
 
     // Get this month's aggregated stats
-    const { data: monthStats } = await supabase
+    const { data: monthStats } = await authenticatedSupabase
       .from('usage_monthly_stats')
       .select('*')
       .eq('user_id', userId)
@@ -45,7 +69,7 @@ analyticsRoutes.get('/analytics/summary', async (c) => {
       .single();
 
     // Get recent errors
-    const { data: recentErrors } = await supabase
+    const { data: recentErrors } = await authenticatedSupabase
       .from('usage_analytics')
       .select('endpoint, status_code, error_type, error_message, created_at')
       .eq('user_id', userId)
@@ -54,7 +78,7 @@ analyticsRoutes.get('/analytics/summary', async (c) => {
       .limit(5);
 
     // Get most used endpoints
-    const { data: topEndpoints } = await supabase
+    const { data: topEndpoints } = await authenticatedSupabase
       .from('usage_analytics')
       .select('endpoint')
       .eq('user_id', userId)
@@ -98,8 +122,11 @@ analyticsRoutes.get('/analytics/daily', async (c) => {
   }
 
   try {
+    // Use authenticated client for RLS compliance
+    const authenticatedSupabase = getAuthenticatedSupabaseClient(c);
+    
     // Get daily stats from usage_daily_stats
-    const { data: dailyStats, error: dailyError } = await supabase
+    const { data: dailyStats, error: dailyError } = await authenticatedSupabase
       .from('usage_daily_stats')
       .select('*')
       .eq('user_id', userId)
@@ -113,15 +140,22 @@ analyticsRoutes.get('/analytics/daily', async (c) => {
     }
 
     // Get current user subscription to access usage_v2 data
-    const { data: subscription, error: subError } = await supabase
-      .from('user_subscriptions')
-      .select('usage_v2')
-      .eq('user_id', userId)
-      .single();
+    let subscription = null;
+    try {
+      const { data: subData, error: subError } = await authenticatedSupabase
+        .from('user_subscriptions')
+        .select('usage_v2')
+        .eq('user_id', userId)
+        .single();
 
-    if (subError) {
-      console.error('[Analytics Daily] Error fetching subscription:', subError);
-      // Continue without subscription data
+      if (subError) {
+        console.error('[Analytics Daily] Error fetching subscription:', subError);
+        // Continue without subscription data
+      } else {
+        subscription = subData;
+      }
+    } catch (error) {
+      console.error('[Analytics Daily] Error fetching subscription:', error);
     }
 
     // Extract current billable request count from usage_v2
@@ -192,7 +226,10 @@ analyticsRoutes.get('/analytics/monthly', async (c) => {
   const limit = parseInt(c.req.query('limit') || '12');
 
   try {
-    let query = supabase
+    // Use authenticated client for RLS compliance
+    const authenticatedSupabase = getAuthenticatedSupabaseClient(c);
+    
+    let query = authenticatedSupabase
       .from('usage_monthly_stats')
       .select('*')
       .eq('user_id', userId)

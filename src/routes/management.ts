@@ -26,27 +26,54 @@ async function getUserIdFromContext(c: any): Promise<string | null> {
 //===============================================================================================================
 
 //===============================================================================================================
-// Helper to get a privileged Supabase client
+// Helper to get a privileged Supabase client (bypasses RLS)
 function getPrivilegedSupabaseClient(c: any) {
   const serviceRoleKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
   if (!serviceRoleKey || !supabaseUrl) {
     throw new Error('Supabase service role key and URL must be provided.');
   }
-  const userJwt = c.req.header("Authorization")?.replace("Bearer ", "");
-  return createClient(
-    supabaseUrl as string, 
-    serviceRoleKey as string, 
-    { global: { headers: { Authorization: `Bearer ${userJwt}` } } }
-  );
+  return createClient(supabaseUrl as string, serviceRoleKey as string);
+}
+
+// Helper to get an authenticated Supabase client (respects RLS)
+function getAuthenticatedSupabaseClient(c: any) {
+  const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+  const supabaseAnonKey = c.env?.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Supabase URL and anon key must be provided.');
+  }
+  
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    throw new Error('Authorization header required');
+  }
+  
+  const userJwt = authHeader.replace("Bearer ", "");
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: { headers: { Authorization: `Bearer ${userJwt}` } }
+  });
 }
 //===============================================================================================================
 
 // --- USAGE TRACKING & LIMITING HELPERS ---
 export async function checkAndIncrementUsage({ userId, usageType, increment = 1, customDate }: { userId: string, usageType: string, increment?: number, customDate?: Date }) {
   console.log(`[checkAndIncrementUsage] >>> Enter function - userId=${userId}, usageType=${usageType}, increment=${increment}`);
-  // Fetch user subscription and plan
-  const { data: userSub, error: userSubError } = await supabase
+  
+  // Create service role client for admin usage tracking operations
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseUrl || !supabaseServiceKey) {
+    console.error('[checkAndIncrementUsage] Missing Supabase configuration for service role');
+    return { allowed: false, error: 'Server configuration error', status: 500 };
+  }
+  
+  const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+  
+  // Fetch user subscription and plan (using service role client)
+  const { data: userSub, error: userSubError } = await serviceClient
     .from('user_subscriptions')
     .select('*, plan:subscription_plans(*)')
     .eq('user_id', userId)
@@ -98,8 +125,8 @@ export async function checkAndIncrementUsage({ userId, usageType, increment = 1,
   }
   // --- PROJECT LIMIT ENFORCEMENT ---
   if (usageType === 'projects' && typeof plan.max_projects === 'number') {
-    // Count current projects for this user
-    const { count, error: countError } = await supabase
+    // Count current projects for this user (using service role client)
+    const { count, error: countError } = await serviceClient
       .from('mcp_servers')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', userId);
@@ -132,8 +159,8 @@ export async function checkAndIncrementUsage({ userId, usageType, increment = 1,
   // Log usage object before update
   console.log(`[checkAndIncrementUsage] Usage object before DB update:`, JSON.stringify(usage, null, 2));
 
-  // Save usage - update to use usage_v2
-  const { error: usageUpdateError } = await supabase
+  // Save usage - update to use usage_v2 (using service role client)
+  const { error: usageUpdateError } = await serviceClient
     .from('user_subscriptions')
     .update({ usage_v2: usage, usage: usage })
     .eq('user_id', userId)
@@ -248,7 +275,8 @@ managementRoutes.post('/mcp-projects', validator('json', (value) => mcpProjectCr
     const apiKey = isPrivate ? crypto.randomUUID() : null;
     const slug = projectData.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     
-    const frontendUrl = process.env.MCP_FRONTEND_BASE_URL || 'https://mcpdploy.com'; // fallback
+    const frontendUrl = process.env.MCP_FRONTEND_BASE_URL || 'http://localhost:3000'; // fallback
+    //'https://mcpdploy.com'; // fallback
     const endpoint = `${frontendUrl}/mcp/${slug}-${projectId}`;
 
     const supabasePrivileged = getPrivilegedSupabaseClient(c);
@@ -509,7 +537,18 @@ managementRoutes.post('/stripe/webhook', async (c) => {
   // Helper to upsert subscription
   async function upsertSubscription({ userId, planId, status = 'active', periodEnd }: { userId: string, planId: string, status?: string, periodEnd?: string }) {
     try {
-      const { error: upsertError } = await supabase.from('user_subscriptions').upsert([
+      // Use service role client for admin operations
+      const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+      const supabaseServiceKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+      
+      if (!supabaseUrl || !supabaseServiceKey) {
+        console.error('[Stripe Webhook] Missing Supabase configuration');
+        return;
+      }
+      
+      const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+      
+      const { error: upsertError } = await serviceClient.from('user_subscriptions').upsert([
         {
           user_id: userId,
           plan_id: planId,
@@ -534,15 +573,22 @@ managementRoutes.post('/stripe/webhook', async (c) => {
     const stripeSubscriptionId = session.subscription as string;
     console.log('[Stripe Webhook] checkout.session.completed:', { userId, planId, customer: session.customer, customer_email: session.customer_email, stripeSubscriptionId });
     if (userId && planId && stripeSubscriptionId) {
-      await supabase.from('user_subscriptions').upsert([
-        {
-          user_id: userId,
-          plan_id: planId,
-          status: 'active',
-          current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-          stripe_subscription_id: stripeSubscriptionId
-        }
-      ], { onConflict: 'user_id' });
+      const supabaseUrl = c.env?.SUPABASE_URL || process.env.SUPABASE_URL;
+      const supabaseServiceKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+      
+      if (supabaseUrl && supabaseServiceKey) {
+        const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+        
+        await serviceClient.from('user_subscriptions').upsert([
+          {
+            user_id: userId,
+            plan_id: planId,
+            status: 'active',
+            current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            stripe_subscription_id: stripeSubscriptionId
+          }
+        ], { onConflict: 'user_id' });
+      }
     } else {
       console.warn('[Stripe Webhook] Missing user_id, plan_id, or stripeSubscriptionId in session metadata.');
     }
@@ -587,33 +633,44 @@ managementRoutes.post('/stripe/webhook', async (c) => {
 managementRoutes.get('/subscription/plan', async (c) => {
   const userId = await getUserIdFromContext(c);
   if (!userId) return c.json({ error: 'Unauthorized' }, 401 as ContentfulStatusCode);
-  const { data: sub, error } = await supabase
-    .from('user_subscriptions')
-    .select('*, plan:subscription_plans(*)')
-    .eq('user_id', userId)
-    .single();
-  if (error || !sub) return c.json({ error: 'No subscription found' }, 404);
   
-  // Count current projects for this user
-  const { count: projectCount, error: countError } = await supabase
-    .from('mcp_servers')
-    .select('*', { count: 'exact', head: true })
-    .eq('user_id', userId);
-  
-  if (countError) {
-    console.error('[Subscription Plan] Failed to count projects for user:', userId, countError);
-  }
-  
-  // Add project count to the usage object
-  const enhancedSub = {
-    ...sub,
-    usage: {
-      ...sub.usage,
-      mcp_server_count: projectCount || 0
+  try {
+    // Use authenticated client that respects RLS
+    const authenticatedSupabase = getAuthenticatedSupabaseClient(c);
+    
+    const { data: sub, error } = await authenticatedSupabase
+      .from('user_subscriptions')
+      .select('*, plan:subscription_plans(*)')
+      .eq('user_id', userId)
+      .single();
+    if (error || !sub) return c.json({ error: 'No subscription found' }, 404);
+    
+    // Count current projects for this user
+    const { count: projectCount, error: countError } = await authenticatedSupabase
+      .from('mcp_servers')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    
+    if (countError) {
+      console.error('[Subscription Plan] Failed to count projects for user:', userId, countError);
     }
-  };
-  
-  return c.json(enhancedSub);
+    
+    // Add project count to the usage object
+    const enhancedSub = {
+      ...sub,
+      usage: {
+        ...sub.usage,
+        mcp_server_count: projectCount || 0
+      }
+    };
+    
+    return c.json(enhancedSub);
+  } catch (error: any) {
+    if (error.message === 'Authorization header required') {
+      return c.json({ error: 'Authorization header required' }, 401 as ContentfulStatusCode);
+    }
+    return c.json({ error: 'Server configuration error' }, 500 as ContentfulStatusCode);
+  }
 });
 
 //========================================================================================================================================================================

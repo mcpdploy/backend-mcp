@@ -8,12 +8,15 @@ import type { MiddlewareHandler } from 'hono';
 // Helper function to assign free plan to users without subscription
 // This is a safety net that ensures all authenticated users have a subscription
 // It's particularly important for OAuth users who might bypass the normal signup flow
-async function ensureUserHasSubscription(userId: string, supabaseUrl: string, supabaseAnonKey: string) {
+async function ensureUserHasSubscription(userId: string, supabaseUrl: string, supabaseAnonKey: string, userJwt: string) {
   try {
-    const { supabase } = await import('../lib/supabaseClient');
+    // Create authenticated Supabase client using user's JWT token
+    const authenticatedSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${userJwt}` } }
+    });
     
     // Check if user already has a subscription
-    const { data: existingSub, error: subError } = await supabase
+    const { data: existingSub, error: subError } = await authenticatedSupabase
       .from('user_subscriptions')
       .select('id, status')
       .eq('user_id', userId)
@@ -28,8 +31,9 @@ async function ensureUserHasSubscription(userId: string, supabaseUrl: string, su
     // Log this as it should mainly happen for OAuth users or edge cases
     console.log(`[Auth Middleware] No subscription found for user ${userId}, assigning free plan (likely OAuth user or edge case)`);
 
-    // Find the free plan
-    const { data: freePlan, error: planError } = await supabase
+    // Find the free plan (use anonymous client for this since subscription_plans has public read access)
+    const { supabase: anonSupabase } = await import('../lib/supabaseClient');
+    const { data: freePlan, error: planError } = await anonSupabase
       .from('subscription_plans')
       .select('*')
       .eq('name', 'Free')
@@ -42,9 +46,8 @@ async function ensureUserHasSubscription(userId: string, supabaseUrl: string, su
       return;
     }
 
-    // Insert new subscription with comprehensive usage_v2 structure
-    // Use upsert with onConflict to handle race conditions safely
-    const { error: insertError } = await supabase
+    // Insert new subscription using authenticated client
+    const { error: insertError } = await authenticatedSupabase
       .from('user_subscriptions')
       .upsert([
         {
@@ -172,7 +175,7 @@ export const supabaseAuthMiddleware: MiddlewareHandler<any> = async (c, next) =>
                   console.log("[supabaseAuthMiddleware] User ID from token (reactivated):", user.id);
                   
                   // Ensure user has a subscription
-                  ensureUserHasSubscription(user.id, supabaseUrl, supabaseAnonKey)
+                  ensureUserHasSubscription(user.id, supabaseUrl, supabaseAnonKey, token)
                     .catch(err => console.error("[supabaseAuthMiddleware] Background subscription check failed:", err));
                   
                   await next();
@@ -241,7 +244,7 @@ export const supabaseAuthMiddleware: MiddlewareHandler<any> = async (c, next) =>
         // - OAuth users: May need subscription assigned if OAuth callback failed
         // - Edge cases: Handles any users who somehow lost their subscription
         // Run this asynchronously to not block the request
-        ensureUserHasSubscription(user.id, supabaseUrl, supabaseAnonKey)
+        ensureUserHasSubscription(user.id, supabaseUrl, supabaseAnonKey, token)
           .catch(err => console.error("[supabaseAuthMiddleware] Background subscription check failed:", err));
       } else {
         c.set('userId', null);

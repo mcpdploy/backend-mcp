@@ -195,48 +195,64 @@ authRoutes.post('/auth/signup', async (c) => {
     // Only proceed if signup was successful and user exists
     const userId = data?.user?.id;
     if (userId) {
-      // Find the free plan (name = 'Free' and price = 0)
-      const { data: freePlan, error: planError } = await import('../lib/supabaseClient').then(({ supabase }) =>
-        supabase.from('subscription_plans')
-          .select('*')
-          .eq('name', 'Free')
-          .eq('price', 0)
-          .limit(1)
-          .single()
-      );
-      if (!planError && freePlan && freePlan.id) {
-        // Upsert user_subscriptions if not already present
-        const { data: existing, error: existingError } = await import('../lib/supabaseClient').then(({ supabase }) =>
-          supabase.from('user_subscriptions').select('id').eq('user_id', userId).single()
-        );
-        if (existingError || !existing) {
-          // Insert new subscription with comprehensive usage tracking
-          await import('../lib/supabaseClient').then(({ supabase }) =>
-            supabase.from('user_subscriptions').upsert([
-              {
-                user_id: userId,
-                plan_id: freePlan.id,
-                status: 'active',
-                current_period_end: null,
-                usage: {},
-                usage_v2: {
-                  requests_today: 0,
-                  requests_today_date: null,
-                  requests_this_month: 0,
-                  requests_this_month_date: null,
-                  requests_this_year: 0,
-                  requests_this_year_date: null,
-                  total_requests: 0,
-                  last_request_at: null,
-                  custom_domains: 0,
-                  projects: 0
-                }
-              }
-            ], { onConflict: 'user_id' })
-          );
-        }
+      // Use service role client for initial subscription creation (bypasses RLS)
+      const supabaseServiceKey = c.env?.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!supabaseServiceKey) {
+        console.error('[Auth Signup] Service role key not available for subscription creation');
       } else {
-        console.error('[Auth Signup] Could not find free plan (name="Free" and price=0):', planError);
+        const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
+        
+        // Find the free plan (using anonymous client since it has public read access)
+        const { data: freePlan, error: planError } = await import('../lib/supabaseClient').then(({ supabase }) =>
+          supabase.from('subscription_plans')
+            .select('*')
+            .eq('name', 'Free')
+            .eq('price', 0)
+            .limit(1)
+            .single()
+        );
+        
+        if (!planError && freePlan && freePlan.id) {
+          // Check if subscription already exists (using service client)
+          const { data: existing, error: existingError } = await serviceClient
+            .from('user_subscriptions')
+            .select('id')
+            .eq('user_id', userId)
+            .single();
+            
+          if (existingError || !existing) {
+            // Insert new subscription with comprehensive usage tracking
+            const { error: insertError } = await serviceClient
+              .from('user_subscriptions')
+              .upsert([
+                {
+                  user_id: userId,
+                  plan_id: freePlan.id,
+                  status: 'active',
+                  current_period_end: null,
+                  usage: {},
+                  usage_v2: {
+                    requests_today: 0,
+                    requests_today_date: null,
+                    requests_this_month: 0,
+                    requests_this_month_date: null,
+                    requests_this_year: 0,
+                    requests_this_year_date: null,
+                    total_requests: 0,
+                    last_request_at: null,
+                    custom_domains: 0,
+                    projects: 0
+                  }
+                }
+              ], { onConflict: 'user_id' });
+              
+            if (insertError) {
+              console.error('[Auth Signup] Failed to assign free plan:', insertError);
+            }
+          }
+        } else {
+          console.error('[Auth Signup] Could not find free plan (name="Free" and price=0):', planError);
+        }
       }
     } else {
       console.warn('[Auth Signup] No user id found in signup response:', data);
@@ -902,17 +918,24 @@ authRoutes.post('/auth/oauth-callback', async (c) => {
     let isNewUser = false;
     
     try {
-      // Check if subscription already exists
-      const { data: existingSub, error: existingError } = await import('../lib/supabaseClient').then(({ supabase }) =>
-        supabase.from('user_subscriptions').select('id').eq('user_id', userId).single()
-      );
+      // Create authenticated client using the access token
+      const authenticatedSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: `Bearer ${access_token}` } }
+      });
+      
+      // Check if subscription already exists (using authenticated client)
+      const { data: existingSub, error: existingError } = await authenticatedSupabase
+        .from('user_subscriptions')
+        .select('id')
+        .eq('user_id', userId)
+        .single();
 
       // If no subscription exists, user needs the free plan
       if (existingError || !existingSub) {
         isNewUser = true;
         console.log(`[OAuth Callback] No subscription found for user ${userId}, assigning free plan`);
         
-        // Find the free plan
+        // Find the free plan (using anonymous client since it has public read access)
         const { data: freePlan, error: planError } = await import('../lib/supabaseClient').then(({ supabase }) =>
           supabase.from('subscription_plans')
             .select('*')
@@ -923,9 +946,10 @@ authRoutes.post('/auth/oauth-callback', async (c) => {
         );
 
         if (!planError && freePlan && freePlan.id) {
-          // Insert new subscription
-          const { error: insertError } = await import('../lib/supabaseClient').then(({ supabase }) =>
-            supabase.from('user_subscriptions').upsert([
+          // Insert new subscription using authenticated client
+          const { error: insertError } = await authenticatedSupabase
+            .from('user_subscriptions')
+            .upsert([
               {
                 user_id: userId,
                 plan_id: freePlan.id,
@@ -945,8 +969,7 @@ authRoutes.post('/auth/oauth-callback', async (c) => {
                   projects: 0
                 }
               }
-            ], { onConflict: 'user_id' })
-          );
+            ], { onConflict: 'user_id' });
           
           if (insertError) {
             console.error('[OAuth Callback] Failed to assign free plan:', insertError);

@@ -204,42 +204,552 @@ function generateInfoPage(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MCP Server: ${project.name}</title>
   <style>
-    body { font-family: sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
-    .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-    h1, h2 { color: #333; }
-    pre { background: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; }
-    .api-key { font-family: monospace; background: #eee; padding: 2px 5px; border-radius: 3px; }
-    .badge { display: inline-block; padding: 0.25em 0.5em; font-size: 75%; font-weight: 700; line-height: 1; text-align: center; white-space: nowrap; vertical-align: baseline; border-radius: 0.25rem; }
-    .badge-active { color: #fff; background-color: #28a745; }
-    .badge-inactive { color: #fff; background-color: #dc3545; }
+    :root {
+      --bg-primary: #ffffff;
+      --bg-secondary: #f8f9fa;
+      --bg-card: #ffffff;
+      --text-primary: #1a1a1a;
+      --text-secondary: #6b7280;
+      --text-muted: #9ca3af;
+      --border-color: #e5e7eb;
+      --orange-primary: #f97316;
+      --orange-secondary: #fb923c;
+      --success-color: #10b981;
+      --error-color: #ef4444;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --code-bg: #f3f4f6;
+    }
+
+    [data-theme="light"] {
+      --bg-primary: #ffffff;
+      --bg-secondary: #f8f9fa;
+      --bg-card: #ffffff;
+      --text-primary: #1a1a1a;
+      --text-secondary: #6b7280;
+      --text-muted: #9ca3af;
+      --border-color: #e5e7eb;
+      --code-bg: #f3f4f6;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+
+    [data-theme="dark"] {
+      --bg-primary: #0a0a0a;
+      --bg-secondary: #1a1a1a;
+      --bg-card: #111111;
+      --text-primary: #ffffff;
+      --text-secondary: #d1d5db;
+      --text-muted: #9ca3af;
+      --border-color: #374151;
+      --code-bg: #1f2937;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]):not([data-theme="dark"]) {
+        --bg-primary: #0a0a0a;
+        --bg-secondary: #1a1a1a;
+        --bg-card: #111111;
+        --text-primary: #ffffff;
+        --text-secondary: #d1d5db;
+        --text-muted: #9ca3af;
+        --border-color: #374151;
+        --code-bg: #1f2937;
+        --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+      }
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 3rem;
+      padding: 2rem 0;
+    }
+
+    .logo {
+      font-size: 3rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .logo .mcp-text {
+      color: var(--text-primary);
+    }
+
+    .logo .deploy-text {
+      background: linear-gradient(135deg, var(--orange-primary), var(--orange-secondary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      font-size: 1.25rem;
+      color: var(--text-secondary);
+      font-weight: 400;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      box-shadow: var(--shadow);
+      margin-bottom: 2rem;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    }
+
+    .card-header {
+      padding: 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+    }
+
+    .card-content {
+      padding: 1.5rem;
+    }
+
+    .card-title {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .card-subtitle {
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .info-label {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .info-value {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.375rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+    }
+
+    .badge-active {
+      background: var(--success-color);
+      color: white;
+    }
+
+    .badge-inactive {
+      background: var(--error-color);
+      color: white;
+    }
+
+    .api-key {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+      background: var(--code-bg);
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+    }
+
+    .code {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+      background: var(--code-bg);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.875rem;
+      color: var(--orange-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    .endpoint-section {
+      margin-bottom: 1.5rem;
+    }
+
+    .endpoint-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .list {
+      list-style: none;
+    }
+
+    .list-item {
+      padding: 1rem;
+      border-radius: 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      margin-bottom: 0.75rem;
+      transition: all 0.2s ease;
+    }
+
+    .list-item:hover {
+      background: var(--bg-card);
+      transform: translateX(4px);
+    }
+
+    .list-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: between;
+      gap: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .list-item-title {
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .list-item-type {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      background: var(--code-bg);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    .list-item-content {
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .icon {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .section-count {
+      background: var(--orange-primary);
+      color: white;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.25rem 0.5rem;
+      border-radius: 12px;
+      min-width: 24px;
+      text-align: center;
+    }
+
+    .theme-toggle {
+      position: fixed;
+      top: 2rem;
+      right: 2rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.5rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      z-index: 100;
+      box-shadow: var(--shadow);
+    }
+
+    .theme-toggle:hover {
+      transform: scale(1.05);
+      background: var(--bg-secondary);
+    }
+
+    .theme-toggle svg {
+      width: 20px;
+      height: 20px;
+      color: var(--text-primary);
+    }
+
+    .theme-toggle .light-icon {
+      display: block;
+    }
+
+    .theme-toggle .dark-icon {
+      display: none;
+    }
+
+    [data-theme="dark"] .theme-toggle .light-icon {
+      display: none;
+    }
+
+    [data-theme="dark"] .theme-toggle .dark-icon {
+      display: block;
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 1rem;
+      }
+      
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .logo {
+        font-size: 2.5rem;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>MCP Server: ${project.name} <span class="badge ${project.is_active ? 'badge-active' : 'badge-inactive'}">${project.is_active ? 'Active' : 'Inactive'}</span></h1>
-    <p><strong>Version:</strong> ${project.version || "N/A"}</p>
-    <p><strong>Description:</strong> ${project.description || "N/A"}</p>
-    <p><strong>Project ID (Instance ID):</strong> ${project.id}</p>
-    ${project.api_key ? `<p><strong>API Key:</strong> <span class="api-key">******** (Set in headers)</span></p>` : ''}
+  <button class="theme-toggle" aria-label="Toggle theme">
+    <svg class="light-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+    </svg>
+    <svg class="dark-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path>
+    </svg>
+  </button>
 
-    <h2>Endpoints</h2>
-    <p>Base URL: <code>${projectBaseUrl}</code></p>
-    <p>SSE URL: <code>${sseEndpoint}</code> (if applicable)</p>
-    
-    <h2>Resources (${resources.length})</h2>
-    ${resources.length > 0 ? '<ul>' + resources.map(r => {
-      const pattern = r.uri_pattern || r.template_pattern || r.uri;
-      const resourceType = r.resource_type || 'static';
-      const typeLabel = resourceType === 'static' ? '' : ` (${resourceType})`;
-      return `<li><strong>${r.name}</strong>${typeLabel}: <code>${pattern}</code> ${r.api_url ? '(Proxies: ' + r.api_url + ')' : ''}</li>`;
-    }).join('') + '</ul>' : '<p>No resources configured.</p>'}
-    
-    <h2>Tools (${tools.length})</h2>
-    ${tools.length > 0 ? '<ul>' + tools.map(t => `<li><strong>${t.name}</strong> ${t.api_url ? '(Calls: ' + t.api_url + ')' : ''}</li>`).join('') + '</ul>' : '<p>No tools configured.</p>'}
-    
-    <h2>Prompts (${prompts.length})</h2>
-    ${prompts.length > 0 ? '<ul>' + prompts.map(p => `<li><strong>${p.name}</strong> ${p.api_url ? '(Calls: ' + p.api_url + ')' : ''}</li>`).join('') + '</ul>' : '<p>No prompts configured.</p>'}
+  <div class="container">
+    <div class="header">
+      <div class="logo"><span class="mcp-text">mcp</span><span class="deploy-text">Dploy</span></div>
+      <div class="subtitle">MCP Server Dashboard</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          ${project.name}
+          <span class="badge ${project.is_active ? 'badge-active' : 'badge-inactive'}">
+            ${project.is_active ? 'Active' : 'Inactive'}
+          </span>
+        </div>
+        <div class="card-subtitle">Project Overview</div>
+      </div>
+      <div class="card-content">
+        <div class="info-grid">
+          <div class="info-item">
+            <div class="info-label">Version</div>
+            <div class="info-value">${project.version || "N/A"}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">Server ID</div>
+            <div class="info-value code">${project.id}</div>
+          </div>
+          ${project.api_key ? `
+          <div class="info-item">
+            <div class="info-label">API Key</div>
+            <div class="api-key">******** (Set in headers)</div>
+          </div>
+          ` : ''}
+        </div>
+        ${project.description ? `
+        <div class="info-item">
+          <div class="info-label">Description</div>
+          <div class="info-value">${project.description}</div>
+        </div>
+        ` : ''}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+          </svg>
+          Endpoints
+        </div>
+        <div class="card-subtitle">Service endpoints and connection details</div>
+      </div>
+      <div class="card-content">
+        <div class="endpoint-section">
+          <div class="endpoint-item">
+            <div class="info-label">Streamable HTTP Endpoint</div>
+            <div class="code">${projectBaseUrl}</div>
+          </div>
+          <div class="endpoint-item">
+            <div class="info-label">SSE Endpoint</div>
+            <div class="code">${sseEndpoint}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+          </svg>
+          Resources
+          <span class="section-count">${resources.length}</span>
+        </div>
+        <div class="card-subtitle">Available data resources</div>
+      </div>
+      <div class="card-content">
+        ${resources.length > 0 ? `
+          <ul class="list">
+            ${resources.map(r => {
+              const pattern = r.uri_pattern || r.template_pattern || r.uri;
+              const resourceType = r.resource_type || 'static';
+              return `
+                <li class="list-item">
+                  <div class="list-item-header">
+                    <div class="list-item-title">${r.name}</div>
+                    ${resourceType !== 'static' ? `<div class="list-item-type">${resourceType}</div>` : ''}
+                  </div>
+                  <div class="list-item-content">
+                    <div class="code">${pattern}</div>
+                    ${r.api_url ? `<div style="margin-top: 0.5rem; color: var(--text-muted);">Proxies: ${r.api_url}</div>` : ''}
+                  </div>
+                </li>
+              `;
+            }).join('')}
+          </ul>
+        ` : '<div class="empty-state">No resources configured</div>'}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          </svg>
+          Tools
+          <span class="section-count">${tools.length}</span>
+        </div>
+        <div class="card-subtitle">Available HTTP tools</div>
+      </div>
+      <div class="card-content">
+        ${tools.length > 0 ? `
+          <ul class="list">
+            ${tools.map(t => `
+              <li class="list-item">
+                <div class="list-item-header">
+                  <div class="list-item-title">${t.name}</div>
+                </div>
+                ${t.api_url ? `
+                <div class="list-item-content">
+                  <div style="color: var(--text-muted);">Calls: ${t.api_url}</div>
+                </div>
+                ` : ''}
+              </li>
+            `).join('')}
+          </ul>
+        ` : '<div class="empty-state">No tools configured</div>'}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+          </svg>
+          Prompts
+          <span class="section-count">${prompts.length}</span>
+        </div>
+        <div class="card-subtitle">Available prompt templates</div>
+      </div>
+      <div class="card-content">
+        ${prompts.length > 0 ? `
+          <ul class="list">
+            ${prompts.map(p => `
+              <li class="list-item">
+                <div class="list-item-header">
+                  <div class="list-item-title">${p.name}</div>
+                </div>
+                ${p.api_url ? `
+                <div class="list-item-content">
+                  <div style="color: var(--text-muted);">Calls: ${p.api_url}</div>
+                </div>
+                ` : ''}
+              </li>
+            `).join('')}
+          </ul>
+        ` : '<div class="empty-state">No prompts configured</div>'}
+      </div>
+    </div>
   </div>
+
+  <script>
+    // Theme toggle functionality
+    const themeToggle = document.querySelector('.theme-toggle');
+    const html = document.documentElement;
+    
+    // Get saved theme or default to system preference
+    const savedTheme = localStorage.getItem('theme');
+    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const currentTheme = savedTheme || systemTheme;
+    
+    html.setAttribute('data-theme', currentTheme);
+    
+    themeToggle.addEventListener('click', () => {
+      const currentTheme = html.getAttribute('data-theme');
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      
+      html.setAttribute('data-theme', newTheme);
+      localStorage.setItem('theme', newTheme);
+    });
+  </script>
 </body>
 </html>`;
 }
