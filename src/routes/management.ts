@@ -7,6 +7,8 @@ import {
     mcpProjectUpdateSchema
 } from '../lib/schemas';
 import Stripe from 'stripe';
+// Cloudflare Containers with Durable Objects
+import type { UserAppMetadata } from '../containers/UserAppContainers';
 import { ContentfulStatusCode } from 'hono/utils/http-status';
 
 // Define types for Hono context if not already available globally
@@ -54,6 +56,99 @@ function getAuthenticatedSupabaseClient(c: any) {
   return createClient(supabaseUrl, supabaseAnonKey, {
     global: { headers: { Authorization: `Bearer ${userJwt}` } }
   });
+}
+//===============================================================================================================
+
+//===============================================================================================================
+// --- Cloudflare Containers with Durable Objects Implementation ---
+type RuntimeType = 'node' | 'python';
+
+function detectRuntimeFromFilename(filename: string | undefined | null): RuntimeType | null {
+  if (!filename) return null;
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.ts') || lower.endsWith('.js')) return 'node';
+  if (lower.endsWith('.py')) return 'python';
+  return null;
+}
+
+/**
+ * Deploy an application to a Cloudflare Container using Durable Objects
+ */
+async function deployToContainer({
+  c,
+  userId,
+  projectId,
+  runtime,
+  file,
+  extraRequirements
+}: {
+  c: any;
+  userId: string;
+  projectId: string;
+  runtime: RuntimeType;
+  file: File;
+  extraRequirements?: string[];
+}): Promise<{ success: boolean; port: number; containerId: string; endpoint: string }> {
+  
+  try {
+    const fileContent = await file.text();
+    const fileName = file.name || (runtime === 'node' ? 'index.ts' : 'app.py');
+    
+    // Create metadata for the application
+    const appMetadata: UserAppMetadata = {
+      userId,
+      projectId,
+      fileName,
+      fileContent,
+      requirements: extraRequirements,
+      createdAt: new Date().toISOString()
+    };
+
+    // Get the appropriate container namespace based on runtime
+    const containerNamespace = runtime === 'node' 
+      ? c.env.NODE_CONTAINERS 
+      : c.env.PYTHON_CONTAINERS;
+
+    if (!containerNamespace) {
+      throw new Error(`Container namespace not available for ${runtime} runtime`);
+    }
+
+    // Create a unique container instance for this deployment
+    // Using projectId as the identifier ensures each project gets its own container
+    const containerId = containerNamespace.idFromName(projectId);
+    const containerInstance = containerNamespace.get(containerId);
+
+    // Deploy the application to the container
+    const deployRequest = new Request('http://internal/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(appMetadata)
+    });
+
+    const deployResponse = await containerInstance.fetch(deployRequest);
+    const deployResult = await deployResponse.json() as any;
+
+    if (!deployResult.success) {
+      throw new Error(deployResult.error || 'Deployment failed');
+    }
+
+    // Generate the external endpoint URL for this container using current origin
+    const origin =  'http://localhost:3000';
+    const endpoint = `${origin}/containers/${projectId}`;
+
+    console.log(`[Containers] Successfully deployed ${fileName} to ${runtime} container for user ${userId}`);
+
+    return {
+      success: true,
+      port: deployResult.port || 8000,
+      containerId: projectId,
+      endpoint
+    };
+
+  } catch (error) {
+    console.error('[Containers] Deployment failed:', error);
+    throw error;
+  }
 }
 //===============================================================================================================
 
@@ -814,3 +909,142 @@ managementRoutes.get('/public/mcp-projects', async (c) => {
 
 // NOTE: MCP API request usage tracking has been moved to mcpDynamicHandler to avoid double counting
 //========================================================================================================================================================================
+
+//========================================================================================================================================================================
+// File upload and Cloudflare Containers deployment
+// - Accepts multipart form with 'file' (required) and optional 'name' and 'runtime' and 'requirements' (space-separated)
+// - Creates or reuses a shared container per user+runtime
+// - Deploys file into the container and exposes an HTTP port
+// - Inserts a record into mcp_servers and returns an endpoint URL similar to /mcp-projects
+managementRoutes.post('/containers/upload', async (c) => {
+  const userId = await getUserIdFromContext(c);
+  if (!userId) return c.json({ error: 'Unauthorized: Invalid or missing token' }, 401 as any);
+
+  const form = await c.req.formData();
+  const file = form.get('file') as File | null;
+  const providedRuntime = (form.get('runtime') as string | null)?.toLowerCase() as RuntimeType | null;
+  const providedName = (form.get('name') as string | null) || undefined;
+  const requirementsStr = (form.get('requirements') as string | null) || '';
+  const extraRequirements = requirementsStr.trim().length > 0 ? requirementsStr.trim().split(/\s+/) : undefined;
+
+  if (!file) return c.json({ error: 'Missing file' }, 400);
+
+  const runtime = providedRuntime || detectRuntimeFromFilename(file.name);
+  if (!runtime) return c.json({ error: 'Unsupported file type. Provide index.ts/js for Node or app.py for Python, or set runtime explicitly.' }, 400);
+
+  // Optional: enforce plan limits similar to project creation
+  const { allowed: allowedProjects, error: errorProjects, status: statusProjects } = await checkAndIncrementUsage({ userId, usageType: 'projects' });
+  if (!allowedProjects) return c.json({ error: errorProjects }, (statusProjects as any) ?? 500);
+
+  // Generate project ID first
+  const projectId = crypto.randomUUID();
+
+  // Deploy to Cloudflare Container using Durable Objects
+  const deployResult = await deployToContainer({
+    c,
+    userId,
+    projectId,
+    runtime,
+    file,
+    extraRequirements
+  });
+
+  console.log('line 952 deployResult', deployResult);
+  console.log('line 953 deployResult.endpoint', deployResult.endpoint);
+
+  if (!deployResult.success) {
+    return c.json({ error: 'Failed to deploy application' }, 500);
+  }
+
+  // Generate endpoint slug consistent with /mcp-projects style (no /containers prefix)
+  const slugPrefix = providedName
+    ? providedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+    : 'sea-rainy';
+  const origin =  'http://localhost:3000';
+  //new URL(c.req.url).origin;
+  const mcpEndpoint = `${origin}/container-apps/${slugPrefix}-${projectId}`;
+
+  // Persist a record in container_servers so users can list and delete later
+  try {
+    const supabasePrivileged = getPrivilegedSupabaseClient(c);
+    const name = providedName || (file.name || `${runtime}-app`);
+    const { error: insertError } = await supabasePrivileged
+      .from('container_servers')
+      .insert([
+                 {
+           id: projectId,
+           name,
+        description: `Uploaded ${runtime} app deployed to Cloudflare Container`,
+           user_id: userId,
+        runtime,
+        tags: [runtime, 'cloudflare-container'],
+        endpoint: mcpEndpoint,
+        container_endpoint: deployResult.endpoint,
+        is_active: true,
+         },
+      ]);
+
+    if (insertError) {
+      console.error('[POST /containers/upload] Supabase insert error:', insertError);
+      return c.json({ error: insertError.message }, 500);
+    }
+
+    return c.json({
+      id: projectId,
+      endpoint: mcpEndpoint,
+      containerEndpoint: deployResult.endpoint,
+      runtime,
+      container: { id: deployResult.containerId },
+      port: deployResult.port,
+    }, 201);
+  } catch (err: any) {
+    console.error('[POST /containers/upload] Handler error:', err);
+    return c.json({ error: err.message || String(err) }, 500);
+  }
+});
+
+// Convenience delete alias for container servers (uses existing project deletion logic)
+managementRoutes.delete('/containers/servers/:id', async (c) => {
+  const userId = await getUserIdFromContext(c);
+  if (!userId) return c.json({ error: 'Unauthorized: Invalid or missing token' }, 401 as any);
+  const { id } = c.req.param();
+    const supabasePrivileged = getPrivilegedSupabaseClient(c);
+
+  const { error } = await supabasePrivileged
+    .from('container_servers')
+        .delete()
+    .eq('id', id)
+    .eq('user_id', userId);
+
+  if (error) return c.json({ error: error.message }, (error.message?.includes('not found') || (error as any).code === 'PGRST116') ? 404 : 500);
+  return c.json({ message: 'Server deleted successfully' }, 200);
+});
+
+// List all container servers for the authenticated user
+managementRoutes.get('/containers/servers', async (c) => {
+  const userId = await getUserIdFromContext(c);
+  if (!userId) return c.json({ error: 'Unauthorized: Invalid or missing token' }, 401 as any);
+
+  // Use authenticated client (RLS) scoped to the caller
+  const authenticated = getAuthenticatedSupabaseClient(c);
+  const { data, error } = await authenticated
+    .from('container_servers')
+    .select('id,name,description,endpoint,container_endpoint,runtime,tags,created_at,is_active')
+    .eq('user_id', userId);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const servers = (data || []).map((row: any) => ({
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    runtime: row.runtime,
+    endpoint: row.endpoint, // friendly MCP URL
+    containerEndpoint: row.container_endpoint,
+    tags: row.tags,
+    is_active: row.is_active,
+    created_at: row.created_at,
+  }));
+
+  return c.json(servers);
+});

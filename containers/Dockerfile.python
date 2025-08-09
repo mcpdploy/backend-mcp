@@ -1,0 +1,7 @@
+FROM python:3.11-slim
+WORKDIR /workspace
+ENV PORT=8000
+EXPOSE 8000
+
+# Keep image minimal. The Container entrypoint will be set by the Worker at runtime.
+

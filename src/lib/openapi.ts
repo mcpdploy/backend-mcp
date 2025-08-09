@@ -2878,6 +2878,312 @@ export const openApiSpec = {
         },
         security: [{ bearerAuth: [] }]
       }
+    },
+    '/containers/upload': {
+      post: {
+        tags: ['Containers'],
+        summary: 'Upload and Deploy Container Application',
+        description: 'Upload a Node.js or Python application file to be deployed in a Cloudflare Container. Supports TypeScript/JavaScript files for Node.js runtime and Python files for Python runtime. Returns an MCP-style endpoint URL for accessing the deployed application.',
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  file: {
+                    type: 'string',
+                    format: 'binary',
+                    description: 'Application file to deploy (index.ts, index.js, app.py, etc.)'
+                  },
+                  name: {
+                    type: 'string',
+                    description: 'Optional name for the application (used in endpoint URL)',
+                    example: 'my-api'
+                  },
+                  runtime: {
+                    type: 'string',
+                    enum: ['node', 'python'],
+                    description: 'Runtime environment (auto-detected from file extension if not provided)',
+                    example: 'node'
+                  },
+                  requirements: {
+                    type: 'string',
+                    description: 'Space-separated list of additional packages to install (npm packages for Node.js, pip packages for Python)',
+                    example: 'express cors dotenv'
+                  }
+                },
+                required: ['file']
+              },
+              examples: {
+                node_app: {
+                  summary: 'Node.js TypeScript Application',
+                  value: {
+                    file: 'index.ts (binary file content)',
+                    name: 'my-node-api',
+                    runtime: 'node',
+                    requirements: 'express @types/express cors'
+                  }
+                },
+                python_app: {
+                  summary: 'Python FastAPI Application',
+                  value: {
+                    file: 'app.py (binary file content)',
+                    name: 'my-python-api',
+                    runtime: 'python',
+                    requirements: 'fastapi uvicorn requests'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '201': {
+            description: 'Application deployed successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    id: { 
+                      type: 'string',
+                      format: 'uuid',
+                      description: 'Unique project ID for the deployed application'
+                    },
+                    endpoint: { 
+                      type: 'string',
+                      format: 'url',
+                      description: 'MCP-style endpoint URL for accessing the application',
+                      example: 'http://localhost:3000/containers/123e4567-e89b-12d3-a456-426614174000/mcp/my-api-123e4567-e89b-12d3-a456-426614174000'
+                    },
+                    containerEndpoint: { 
+                      type: 'string',
+                      format: 'url',
+                      description: 'Direct container endpoint URL',
+                      example: 'http://localhost:3000/containers/123e4567-e89b-12d3-a456-426614174000'
+                    },
+                    runtime: { 
+                      type: 'string',
+                      enum: ['node', 'python'],
+                      description: 'Runtime environment used for deployment'
+                    },
+                    container: {
+                      type: 'object',
+                      properties: {
+                        id: { 
+                          type: 'string',
+                          description: 'Container instance ID'
+                        }
+                      }
+                    },
+                    port: { 
+                      type: 'integer',
+                      description: 'Port the application is listening on inside the container',
+                      example: 8000
+                    }
+                  }
+                },
+                example: {
+                  id: '123e4567-e89b-12d3-a456-426614174000',
+                  endpoint: 'http://localhost:3000/containers/123e4567-e89b-12d3-a456-426614174000/mcp/my-api-123e4567-e89b-12d3-a456-426614174000',
+                  containerEndpoint: 'http://localhost:3000/containers/123e4567-e89b-12d3-a456-426614174000',
+                  runtime: 'node',
+                  container: {
+                    id: '123e4567-e89b-12d3-a456-426614174000'
+                  },
+                  port: 8000
+                }
+              }
+            }
+          },
+          '400': { 
+            description: 'Invalid request - missing file, unsupported file type, or invalid runtime',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { 
+                      type: 'string',
+                      example: 'Unsupported file type. Provide index.ts/js for Node or app.py for Python, or set runtime explicitly.'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - invalid or missing token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Unauthorized: Invalid or missing token' }
+                  }
+                }
+              }
+            }
+          },
+          '403': { 
+            description: 'Project limit reached',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { 
+                      type: 'string',
+                      example: 'Project limit reached (5).'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Deployment failed or server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { 
+                      type: 'string',
+                      example: 'Failed to deploy application'
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/containers/servers/{id}': {
+      delete: {
+        tags: ['Containers'],
+        summary: 'Delete Container Application',
+        description: 'Delete a deployed container application by its project ID. This will remove the application from the container and delete its database record.',
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+            description: 'The project ID of the container application to delete'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Container application deleted successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    message: { 
+                      type: 'string',
+                      example: 'Server deleted successfully'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - invalid or missing token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Unauthorized: Invalid or missing token' }
+                  }
+                }
+              }
+            }
+          },
+          '404': { 
+            description: 'Container application not found or access denied',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Container application not found or access denied' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Failed to delete container application' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/containers/servers': {
+      get: {
+        tags: ['Containers'],
+        summary: 'List Container Servers (per user)',
+        description: 'Returns all container-based servers (Node and Python) created by the authenticated user. Includes both the friendly MCP URL and the direct container proxy URL.',
+        responses: {
+          '200': {
+            description: 'List of container servers',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string', format: 'uuid' },
+                      name: { type: 'string' },
+                      description: { type: 'string', nullable: true },
+                      runtime: { type: 'string', enum: ['node', 'python'] },
+                      endpoint: { type: 'string', format: 'url', description: 'Friendly MCP URL' },
+                      containerEndpoint: { type: 'string', format: 'url', description: 'Direct container proxy URL' },
+                      tags: { type: 'array', items: { type: 'string' }, nullable: true },
+                      is_active: { type: 'boolean' },
+                      created_at: { type: 'string', format: 'date-time' }
+                    }
+                  }
+                },
+                example: [
+                  {
+                    id: '123e4567-e89b-12d3-a456-426614174000',
+                    name: 'rainy',
+                    description: 'Uploaded node app deployed to Cloudflare Container',
+                    runtime: 'node',
+                    endpoint: 'http://localhost:3001/mcp/rainy-123e4567-e89b-12d3-a456-426614174000',
+                    containerEndpoint: 'http://localhost:3001/containers/123e4567-e89b-12d3-a456-426614174000',
+                    tags: ['node', 'cloudflare-container'],
+                    is_active: true,
+                    created_at: '2025-08-08T00:00:00.000Z'
+                  }
+                ]
+              }
+            }
+          },
+          '401': { description: 'Unauthorized' },
+          '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
     }
   }
 }; 

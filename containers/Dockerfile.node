@@ -1,0 +1,69 @@
+###########
+# Base stage
+###########
+FROM node:22-bookworm-slim AS base
+
+# Install tini for proper signal handling and curl for healthchecks
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini curl \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN useradd -m -u 10001 nodeuser
+
+ENV NODE_ENV=production
+ENV PORT=8000
+# Ensure Node can resolve globally installed modules (express, ts-node, typescript)
+ENV NODE_PATH=/usr/local/lib/node_modules
+EXPOSE 8000
+
+# Healthcheck: try /health, fallback to root
+HEALTHCHECK --interval=30s --timeout=5s --retries=6 CMD curl -fsS http://localhost:${PORT}/health || curl -fsS http://localhost:${PORT}/ || exit 1
+
+# Use tini as init to properly forward signals and reap children
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+#############
+# App stage
+#############
+FROM base AS app
+
+# Copy manifests and install deps
+COPY package.json ./
+COPY package-lock.json* ./
+RUN if [ -f package-lock.json ]; then \
+      npm ci --omit=dev --no-audit --no-fund; \
+    else \
+      npm install --omit=dev --no-audit --no-fund; \
+    fi
+
+# Copy app source
+COPY . .
+
+# Ensure app files are owned by non-root user, then drop privileges
+RUN chown -R nodeuser:nodeuser /app
+USER nodeuser
+
+# Start app (adjust entry point as needed)
+CMD ["node", "index.js"]
+
+################
+# Runtime stage (default)
+################
+FROM base AS runtime
+
+# Preinstall minimal runtime deps globally so user apps can import without per-deploy npm install
+# Note: do NOT install 'crypto' from npm; Node core 'crypto' is used
+RUN npm install -g --no-audit --no-fund ts-node typescript express @modelcontextprotocol/sdk zod
+
+# Drop privileges in runtime image as well (after installing globals)
+USER nodeuser
+
+# *** EXPOSE IN FINAL STAGE, too ***
+EXPOSE 8000 
+# Copy runner from same directory (placed next to Dockerfile for reliable COPY)
+COPY boot.js /runner/boot.js
+CMD ["node", "/runner/boot.js"]
+

@@ -16,6 +16,35 @@ routes = [
 # (the rest of your config)
 compatibility_flags = ["nodejs_compat"]
 
+# Container configurations for user apps
+[[containers]]
+name = "node-app-container"
+class_name = "NodeAppContainer"
+image = "./containers/Dockerfile.node"
+max_instances = 10
+instance_type = "basic"
+
+[[containers]]
+name = "python-app-container"
+class_name = "PythonAppContainer" 
+image = "./containers/Dockerfile.python"
+max_instances = 10
+instance_type = "basic"
+
+# Durable Object bindings for container management
+[[durable_objects.bindings]]
+name = "NODE_CONTAINERS"
+class_name = "NodeAppContainer"
+
+[[durable_objects.bindings]]
+name = "PYTHON_CONTAINERS"
+class_name = "PythonAppContainer"
+
+# Database migration for Durable Objects
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NodeAppContainer", "PythonAppContainer"]
+
 [observability]
 enabled = true
 
@@ -28,3 +57,12 @@ port = 3000
 
 
 
+[vars]
+"MCP_FRONTEND_BASE_URL" = "http://localhost:3001"
+"SUPABASE_URL" = "https://bzwwyoxfnjueipztlcmw.supabase.co"
+"SUPABASE_ANON_KEY" = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6d3d5b3hmbmp1ZWlwenRsY213Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcyNzIyMTgsImV4cCI6MjA2Mjg0ODIxOH0.wpaii_KLytRNA3bQieKGics8DNlbJVvVmprA-upHeyU"
+"SUPABASE_SERVICE_ROLE_KEY" = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6d3d5b3hmbmp1ZWlwenRsY213Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NzI3MjIxOCwiZXhwIjoyMDYyODQ4MjE4fQ.X2nkz6wpYIuiDujRcFRBLn57rbt8FMHDt0w1BnA9gVQ"
+"STRIPE_SECRET_KEY" = "REDACTED"
+"STRIPE_WEBHOOK_SECRET" ="whsec_5c96f2f1070cf4d38eba279c4af4030ca147f43b83e33ad5c2144973bb6c2c57"
+"RESEND_API_KEY" = "re_6ymfKCbC_6Tp2CEoLJtok2xvNGpeNQvHV"
+"SUPPORT_EMAIL" = "support@mcpdploy.com"
