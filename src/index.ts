@@ -60,6 +60,8 @@ app.use('/subscription/plan', supabaseAuthMiddleware);
 app.use('/subscription/cancel', supabaseAuthMiddleware);
 app.use('/subscription/resume', supabaseAuthMiddleware);
 app.use('/stripe/create-checkout-session', supabaseAuthMiddleware);
+app.use('/stripe/create-portal-session', supabaseAuthMiddleware);
+app.use('/stripe/payment-history', supabaseAuthMiddleware);
 app.use('/auth/change-password', supabaseAuthMiddleware);
 app.use('/support/tickets', supabaseAuthMiddleware);
 app.use('/analytics/*', supabaseAuthMiddleware);

@@ -1231,7 +1231,7 @@ export const openApiSpec = {
       post: {
         tags: ['Payments'],
         summary: 'Stripe Webhook',
-        description: 'Handles Stripe webhook events for subscription management.',
+        description: 'Handles Stripe webhook events for subscription management including checkout completion, invoice payments, subscription updates, and cancellations.',
         requestBody: {
           required: true,
           content: {
@@ -1241,9 +1241,75 @@ export const openApiSpec = {
           }
         },
         responses: {
-          '200': { description: 'Webhook received' },
-          '400': { description: 'Webhook error' }
+          '200': { description: 'Webhook received and processed successfully' },
+          '400': { description: 'Webhook signature verification failed or invalid payload' },
+          '500': { description: 'Server configuration error' }
         }
+      }
+    },
+    '/stripe/create-portal-session': {
+      post: {
+        tags: ['Payments'],
+        summary: 'Create Stripe Customer Portal Session',
+        description: 'Creates a Stripe Customer Portal session for the authenticated user to manage their subscription, payment methods, and billing.',
+        responses: {
+          '200': {
+            description: 'Portal session created successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    url: { 
+                      type: 'string', 
+                      example: 'https://billing.stripe.com/session/...',
+                      description: 'URL to the Stripe Customer Portal session'
+                    }
+                  },
+                  required: ['url']
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - User not authenticated' 
+          },
+          '403': { 
+            description: 'Portal access requires a paid subscription - Free users cannot access billing portal',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Portal access requires a paid subscription' },
+                    message: { type: 'string', example: 'Free users cannot access the billing portal. Please upgrade to a paid plan to manage billing.' },
+                    action: { type: 'string', example: 'upgrade' },
+                    current_plan: { type: 'object', description: 'Current plan details' },
+                    upgrade_url: { type: 'string', example: 'https://mcpdploy.com/pricing' }
+                  }
+                }
+              }
+            }
+          },
+          '404': { 
+            description: 'No active subscription found for the user' 
+          },
+          '500': { 
+            description: 'Internal server error or Stripe API error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Failed to create portal session' },
+                    details: { type: 'string', example: 'Stripe API error details' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        security: [{ bearerAuth: [] }]
       }
     },
     '/subscription/plan': {
@@ -2875,6 +2941,237 @@ export const openApiSpec = {
           },
           '401': { description: 'Unauthorized' },
           '500': { description: 'Server error' }
+        },
+        security: [{ bearerAuth: [] }]
+      }
+    },
+    '/stripe/payment-history': {
+      get: {
+        tags: ['Payments'],
+        summary: 'Get User Payment History',
+        description: 'Returns the complete payment history for the authenticated user, including successful payments with invoice details and failed payment attempts.',
+        responses: {
+          '200': {
+            description: 'Payment history retrieved successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    customer_id: { 
+                      type: 'string', 
+                      example: 'cus_1234567890abcdef',
+                      description: 'Stripe customer ID'
+                    },
+                    payment_history: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          date: { 
+                            type: 'string', 
+                            format: 'date-time',
+                            example: '2025-08-11T20:15:35.335Z',
+                            description: 'Payment date'
+                          },
+                          status: { 
+                            type: 'string', 
+                            enum: ['Paid', 'Failed'],
+                            example: 'Paid',
+                            description: 'Payment status'
+                          },
+                          amount: { 
+                            type: 'string', 
+                            example: '29.99',
+                            description: 'Payment amount in dollars'
+                          },
+                          currency: { 
+                            type: 'string', 
+                            example: 'USD',
+                            description: 'Payment currency'
+                          },
+                          invoice: {
+                            oneOf: [
+                              {
+                                type: 'object',
+                                properties: {
+                                  id: { type: 'string', example: 'in_1234567890abcdef' },
+                                  number: { type: 'string', example: 'INV-001' },
+                                  url: { 
+                                    type: 'string', 
+                                    format: 'url',
+                                    example: 'https://invoice.stripe.com/i/acct_1Lb5Lz545B4TZWxSIGU/live_YWNjdF8xTGI1THpCNFRaV3hTSUdVLF9TcHhQdDdPczFheDRreHhFR0hvV1podERIeGZmVkZpLDE0NTQ4OTI1NA0200svwwet94Xi?s=ap',
+                                    description: 'Hosted invoice URL'
+                                  },
+                                  pdf_url: { 
+                                    type: 'string', 
+                                    format: 'url',
+                                    example: 'https://pay.stripe.com/invoice/acct_1Lb5Lz545B4TZWxSIGU/test_YWNjdF8xTGI1THpCNFRaV3hTSUdVLF9TcHhQdDdPczFheDRreHhFR0hvV1podERIeGZmVkZpLDE0NTQ4OTI1NA0200svwwet94Xi/pdf?s=ap',
+                                    description: 'PDF invoice download URL'
+                                  },
+                                  description: { 
+                                    type: 'string', 
+                                    example: 'Pro Plan Subscription',
+                                    description: 'Invoice description'
+                                  },
+                                  lines: {
+                                    type: 'array',
+                                    items: {
+                                      type: 'object',
+                                      properties: {
+                                        description: { type: 'string', example: 'Pro Plan - Monthly' },
+                                        amount: { type: 'string', example: '29.99' },
+                                        quantity: { type: 'integer', example: 1 },
+                                        unit_amount: { type: 'string', example: '29.99', nullable: true }
+                                      }
+                                    }
+                                  },
+                                  customer: {
+                                    type: 'object',
+                                    properties: {
+                                      email: { type: 'string', format: 'email', example: 'user@example.com' },
+                                      name: { type: 'string', example: 'John Doe' }
+                                    }
+                                  },
+                                  subscription_id: { type: 'string', example: 'sub_1234567890abcdef' }
+                                }
+                              },
+                              { type: 'null' }
+                            ],
+                            description: 'Invoice details for successful payments, null for failed payments'
+                          },
+                          description: { 
+                            type: 'string', 
+                            example: 'Subscription payment',
+                            description: 'Payment description'
+                          },
+                          charge_id: { 
+                            type: 'string', 
+                            example: 'ch_1234567890abcdef',
+                            description: 'Stripe charge ID (for failed payments)',
+                            nullable: true
+                          }
+                        },
+                        required: ['date', 'status', 'amount', 'currency']
+                      }
+                    },
+                    total_payments: { 
+                      type: 'integer', 
+                      example: 5,
+                      description: 'Total number of successful payments'
+                    },
+                    total_failed: { 
+                      type: 'integer', 
+                      example: 1,
+                      description: 'Total number of failed payment attempts'
+                    },
+                    summary: {
+                      type: 'object',
+                      properties: {
+                        total_paid: { 
+                          type: 'string', 
+                          example: '149.95',
+                          description: 'Total amount paid in dollars'
+                        },
+                        total_failed: { 
+                          type: 'string', 
+                          example: '29.99',
+                          description: 'Total amount of failed payments in dollars'
+                        }
+                      }
+                    }
+                  }
+                },
+                example: {
+                  customer_id: 'cus_1234567890abcdef',
+                  payment_history: [
+                    {
+                      date: '2025-08-11T20:15:35.335Z',
+                      status: 'Paid',
+                      amount: '29.99',
+                      currency: 'USD',
+                      invoice: {
+                        id: 'in_1234567890abcdef',
+                        number: 'INV-001',
+                        url: 'https://invoice.stripe.com/i/acct_1Lb5Lz545B4TZWxSIGU/live_YWNjdF8xTGI1THpCNFRaV3hTSUdVLF9TcHhQdDdPczFheDRreHhFR0hvV1podERIeGZmVkZpLDE0NTQ4OTI1NA0200svwwet94Xi?s=ap',
+                        pdf_url: 'https://pay.stripe.com/invoice/acct_1Lb5Lz545B4TZWxSIGU/test_YWNjdF8xTGI1THpCNFRaV3hTSUdVLF9TcHhQdDdPczFheDRreHhFR0hvV1podERIeGZmVkZpLDE0NTQ4OTI1NA0200svwwet94Xi/pdf?s=ap',
+                        description: 'Pro Plan Subscription',
+                        lines: [
+                          {
+                            description: 'Pro Plan - Monthly',
+                            amount: '29.99',
+                            quantity: 1,
+                            unit_amount: '29.99'
+                          }
+                        ],
+                        customer: {
+                          email: 'user@example.com',
+                          name: 'John Doe'
+                        },
+                        subscription_id: 'sub_1234567890abcdef'
+                      },
+                      description: 'Subscription payment'
+                    },
+                    {
+                      date: '2025-08-10T15:30:00.000Z',
+                      status: 'Failed',
+                      amount: '29.99',
+                      currency: 'USD',
+                      invoice: null,
+                      description: 'Payment attempt',
+                      charge_id: 'ch_failed1234567890'
+                    }
+                  ],
+                  total_payments: 1,
+                  total_failed: 1,
+                  summary: {
+                    total_paid: '29.99',
+                    total_failed: '29.99'
+                  }
+                }
+              }
+            }
+          },
+          '401': { 
+            description: 'Unauthorized - missing or invalid token',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Unauthorized' }
+                  }
+                }
+              }
+            }
+          },
+          '404': { 
+            description: 'No active subscription found',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'No active subscription found' }
+                  }
+                }
+              }
+            }
+          },
+          '500': { 
+            description: 'Server error or Stripe API error',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    error: { type: 'string', example: 'Failed to fetch payment history' },
+                    details: { type: 'string', example: 'Stripe API error details' }
+                  }
+                }
+              }
+            }
+          }
         },
         security: [{ bearerAuth: [] }]
       }
