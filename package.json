@@ -11,12 +11,12 @@
   "devDependencies": {
     "@types/node": "^22.15.2",
     "typescript": "^5.5.2",
-    "wrangler": "^4.13.2"
+    "wrangler": "^4.31.0"
   },
   "dependencies": {
     "@hono/mcp": "^0.1.1",
     "@hono/swagger-ui": "^0.5.1",
-    "@modelcontextprotocol/sdk": "^1.13.0",
+    "@modelcontextprotocol/sdk": "^1.17.3",
     "@supabase/supabase-js": "^2.49.8",
     "fetch-to-node": "^2.1.0",
     "hono": "^4.7.7",
