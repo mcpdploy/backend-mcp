@@ -58,6 +58,11 @@ type SessionData = {
   projectId: string;
 };
 
+//TODO: refactor this there are limitations to this approach since we are using supabase, 
+//  https://developers.cloudflare.com/kv/  looks  good if we go with a stateless approach
+// 1)  single point of failure if the server goes down  or restarts all active sessions are lost
+// 2) not scalable to multiple instances of the server
+// 3) 
 const statefulSessions = new Map<string, SessionData>();
 
 function cleanupExpiredSessions(): void {
