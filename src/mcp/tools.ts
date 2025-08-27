@@ -84,6 +84,7 @@ function evaluateTerm(expr: string): number {
   return result;
 }
 
+// TODO: refactor
 export async function registerTools(mcpServer: McpServer, project: any): Promise<void> {
   
   // ---------- Tools (EXACT style you requested) ----------
@@ -99,7 +100,7 @@ export async function registerTools(mcpServer: McpServer, project: any): Promise
         api_url: toolConfig.api_url || null,
       });
 
-    // Build input schema as raw Record (MCP SDK expects ZodRawShape, not ZodObject)
+
     const inputSchema: Record<string, z.ZodTypeAny> = {};
     if (toolConfig.parameters) {
       Object.entries(toolConfig.parameters).forEach(([key, paramConfig]) => {
